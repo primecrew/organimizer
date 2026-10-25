@@ -1,0 +1,4 @@
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+# Statically link libgcc / winpthread so the exe needs no MinGW DLLs.
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-static", "-C", "link-arg=-static-libgcc"]
