@@ -366,7 +366,8 @@ extensions = {extensions}
 ; Date source.
 ;   auto     = try the sources in 'auto_order' below, first one found wins
 ;   filename = detect the date from the file name (IMG_20240315_..., 2024-03-15, ...)
-;   exif     = EXIF "date taken" (JPEG, TIFF, HEIC, PNG, WebP when present)
+;   exif     = EXIF "date taken" (JPEG, TIFF, HEIC, PNG, WebP when present),
+;              or the creation time stored in MP4 / MOV / M4V / 3GP videos
 ;   modified = file modified date (local time)
 ;   created  = file creation date (local time)
 ; Default: auto

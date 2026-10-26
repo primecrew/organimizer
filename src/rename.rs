@@ -602,7 +602,10 @@ impl RuleKind {
     }
 
     pub fn type_label(&self) -> &'static str {
-        Self::type_label_for(self.type_key())
+        match self {
+            RuleKind::Replace(r) if r.regex => Self::type_label_for("regex"),
+            _ => Self::type_label_for(self.type_key()),
+        }
     }
 
     /// One-line human description, used in the GUI and as INI comment.
@@ -2286,7 +2289,7 @@ impl RuleSpec {
             RuleKind::Replace(r) => {
                 r.find = get("find").unwrap_or_default().to_string();
                 r.with = get("with").unwrap_or_default().to_string();
-                r.regex = flag("regex", false);
+                r.regex = flag("regex", r.regex);
                 r.case_sensitive = flag("case", false);
                 r.occurrence = get("occ").and_then(Occurrence::from_key).unwrap_or(Occurrence::All);
             }
@@ -2535,7 +2538,7 @@ mod tests {
         // invalid regex is reported, not applied
         let bad = RuleSpec::new(replace("(unclosed", "", true, false, Occurrence::All));
         let e = compile_rules(&[bad.clone()]).err().unwrap();
-        assert!(e.starts_with("Rule 1 (Replace): invalid regular expression"), "{e}");
+        assert!(e.starts_with("Rule 1 (Regular expressions): invalid regular expression"), "{e}");
         assert_eq!(validate_chain(&[bad]).len(), 1);
         // disabled invalid rules do not block
         let mut off = RuleSpec::new(replace("(", "", true, false, Occurrence::All));
@@ -3218,5 +3221,18 @@ mod tests {
         compiled[0].apply(&mut np, &ctx);
         assert_eq!(np.ext, ".jpg");
         assert_eq!(np.warnings.len(), 1);
+    }
+
+    #[test]
+    fn regex_type_key_defaults_to_regex_mode() {
+        let r = RuleSpec::from_ini_value("regex | on | find=^(IMG%7CVID)_ | with=").unwrap();
+        match &r.kind {
+            RuleKind::Replace(x) => assert!(x.regex),
+            k => panic!("{k:?}"),
+        }
+        assert_eq!(r.kind.type_label(), "Regular expressions");
+        assert_eq!(run("IMG_0001.jpg", &[r.kind.clone()]), "0001.jpg");
+        let plain = RuleSpec::from_ini_value("replace | on | find=a.c").unwrap();
+        assert_eq!(plain.kind.type_label(), "Replace");
     }
 }
