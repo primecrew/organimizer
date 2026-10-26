@@ -1,0 +1,35 @@
+.
+./Already sorted
+./Already sorted/March 2024
+./Already sorted/March 2024/IMG_20240320_090000.jpg
+./Documents
+./Documents/report.pdf
+./Documents/todo.txt
+./Downloads
+./Downloads/README.txt
+./Downloads/disguised_png.jpg
+./Downloads/image.png
+./Downloads/wallpaper   final__v2..jpg
+./Holiday 2023
+./Holiday 2023/DSC_0001.JPG
+./Holiday 2023/DSC_0001.JPG.xmp
+./Holiday 2023/DSC_0002.jpg
+./Holiday 2023/DSC_0002.jpg.json
+./Holiday 2023/IMG_20230704_101500.jpg
+./Holiday 2023/Videos
+./Holiday 2023/Videos/clip.MP4
+./Holiday 2023/été à Paris – copy.jpg
+./IMG_20240315_142530.jpg
+./Phone
+./Phone/DCIM
+./Phone/DCIM/Camera
+./Phone/DCIM/Camera/IMG_20240101_120500 (1).jpg
+./Phone/DCIM/Camera/IMG_20240101_120500.jpg
+./Phone/DCIM/Camera/VID_20240101_120000.mp4
+./PhotoSorter-undo-20261025-192504.undone.json
+./Screenshot 2024-03-15 at 10.22.01.png
+./notes.txt
+./photo (1).JPG
+./photo (2).JPG
+./photo.JPG
+./receipt.pdf

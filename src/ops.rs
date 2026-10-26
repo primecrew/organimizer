@@ -5,7 +5,9 @@
 //! * `std::fs::rename` first, copy + verify + delete only across devices;
 //! * the undo log is written *before* the first move and kept up to date,
 //!   so an interrupted run can still be undone;
-//! * undo only ever deletes folders that this app created and that are empty.
+//! * undo only ever deletes folders that this app created and that are empty;
+//! * renames (from the rule chain) are recorded exactly like moves, so undo
+//!   restores both the original name and the original folder.
 
 use std::collections::HashSet;
 use std::fs;
@@ -15,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::plan::{Plan, Status, unique_dest};
+use crate::plan::{Plan, Status, same_file, unique_dest_for};
 
 pub const UNDO_PREFIX: &str = "PhotoSorter-undo-";
 pub const UNDO_DONE_SUFFIX: &str = ".undone.json";
@@ -70,6 +72,11 @@ fn is_cross_device(e: &io::Error) -> bool {
 /// needed (different volume).
 pub fn move_file(from: &Path, to: &Path) -> io::Result<bool> {
     if to.exists() {
+        if from != to && same_file(from, to) {
+            // case-only rename on a case-insensitive drive (a.JPG -> a.jpg)
+            case_only_rename(from, to)?;
+            return Ok(false);
+        }
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "destination already exists"));
     }
     match fs::rename(from, to) {
@@ -80,6 +87,31 @@ pub fn move_file(from: &Path, to: &Path) -> io::Result<bool> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Rename via a unique temporary name in the same folder, so that only the
+/// letter case changes. Rolls back if the second step fails.
+fn case_only_rename(from: &Path, to: &Path) -> io::Result<()> {
+    let dir = from.parent().unwrap_or(Path::new("."));
+    let mut n = 0u32;
+    let tmp = loop {
+        let t = dir.join(format!(".photosorter-case-{}-{n}.tmp", std::process::id()));
+        if !t.exists() {
+            break t;
+        }
+        n += 1;
+    };
+    fs::rename(from, &tmp)?;
+    if to.exists() {
+        // something else appeared meanwhile: put it back, never overwrite
+        let _ = fs::rename(&tmp, from);
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "destination already exists"));
+    }
+    if let Err(e) = fs::rename(&tmp, to) {
+        let _ = fs::rename(&tmp, from);
+        return Err(e);
+    }
+    Ok(())
 }
 
 fn copy_then_delete(from: &Path, to: &Path) -> io::Result<()> {
@@ -183,8 +215,8 @@ pub fn execute(plan: &Plan, cancel: &AtomicBool, progress: &mut dyn FnMut(usize,
             }
         }
         // Re-check collisions at apply time (disk may have changed).
-        let dest = if item.dest_path.exists() {
-            unique_dest(&item.dest_dir, &item.new_name, &HashSet::new()).0
+        let dest = if item.dest_path.exists() && !same_file(&item.source, &item.dest_path) {
+            unique_dest_for(&item.dest_dir, &item.new_name, &HashSet::new(), Some(&item.source)).0
         } else {
             item.dest_path.clone()
         };
@@ -257,7 +289,7 @@ pub fn undo(log_path: &Path, progress: &mut dyn FnMut(usize, usize)) -> UndoRepo
             remaining.push(m.clone());
             continue;
         }
-        if m.from.exists() {
+        if m.from.exists() && !same_file(&m.from, &m.to) {
             report.errors.push((m.from.clone(), "Original location is occupied, not overwriting".into()));
             remaining.push(m.clone());
             continue;
@@ -470,5 +502,329 @@ mod tests {
             fs::metadata(&b).unwrap().modified().unwrap(),
             SystemTime::UNIX_EPOCH + Duration::from_secs(MAR_2024)
         );
+    }
+
+    // ---------------------------------------------------------------- v2 --
+
+    use crate::plan::{Plan, stages_with_rules};
+    use crate::rename::*;
+
+    fn plan_with(r: &Path, opts: &PlanOptions, rules: &[RuleSpec]) -> Plan {
+        let exts = crate::scan::parse_extensions("");
+        let no = AtomicBool::new(false);
+        let files = crate::scan::scan(r, true, &exts, &no, &mut |_, _| {}).files;
+        let stages = stages_with_rules(rules, &exts).unwrap();
+        build_plan(r, &files, opts, &stages, &no, &mut |_, _| {})
+    }
+
+    fn mod_opts(sort: bool) -> PlanOptions {
+        PlanOptions {
+            date: DateConfig { mode: DateMode::Only(SourceKind::Modified), ..Default::default() },
+            sort_into_folders: sort,
+            ..Default::default()
+        }
+    }
+
+    fn names(plan: &Plan, root: &Path) -> Vec<(String, String)> {
+        let mut v: Vec<(String, String)> = plan
+            .items
+            .iter()
+            .map(|i| {
+                let src = i.source.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+                let dst = if i.status == Status::Move {
+                    i.dest_path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/")
+                } else {
+                    format!("<{}>", i.status.label())
+                };
+                (src, dst)
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn constant_name(text: &str) -> RuleSpec {
+        RuleSpec::new(RuleKind::AddText(AddTextRule { text: text.into(), position: Position::Replace }))
+    }
+
+    #[test]
+    fn no_enabled_rules_is_identical_to_v1() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("a.jpg"), MAR_2024, "a");
+        touch(&r.join("B.JPG"), JUL_2023, "b");
+        touch(&r.join("x/IMG_20200105_101010.png"), MAR_2024, "img");
+        touch(&r.join("March 2024/a.jpg"), MAR_2024, "existing");
+        touch(&r.join("July 2023/c.jpg"), MAR_2024, "misfiled");
+        let opts = PlanOptions::default();
+        let exts = crate::scan::parse_extensions("");
+        let no = AtomicBool::new(false);
+        let files = crate::scan::scan(r, true, &exts, &no, &mut |_, _| {}).files;
+        let v1 = build_plan(r, &files, &opts, &default_stages(), &no, &mut |_, _| {});
+        let mut disabled = constant_name("zzz");
+        disabled.enabled = false;
+        for rules in [vec![], vec![disabled]] {
+            let v2 = plan_with(r, &opts, &rules);
+            assert_eq!(names(&v1, r), names(&v2, r));
+            for (a, b) in v1.items.iter().zip(&v2.items) {
+                assert_eq!(a.new_name, b.new_name);
+                assert_eq!(a.dest_path, b.dest_path);
+                assert_eq!(a.status, b.status);
+                assert_eq!(a.renamed_for_collision, b.renamed_for_collision);
+                assert!(b.warnings.is_empty());
+            }
+            assert_eq!(v1.counts(), v2.counts());
+        }
+    }
+
+    #[test]
+    fn rules_then_month_folder_apply_and_undo() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("IMG_0001.JPG"), MAR_2024, "1");
+        touch(&r.join("IMG_0002.JPG"), MAR_2024, "2");
+        touch(&r.join("trip/IMG_0003.jpg"), JUL_2023, "3");
+        touch(&r.join("trip/notes.txt"), JUL_2023, "notes");
+        touch(&r.join("trip/IMG_0003.xmp"), JUL_2023, "sidecar");
+        touch(&r.join("March 2024/holiday_001.jpg"), MAR_2024, "occupant");
+        let before = snapshot(r);
+        let rules = vec![
+            RuleSpec::new(RuleKind::Replace(ReplaceRule {
+                find: r"^IMG_\d+$".into(),
+                with: "holiday".into(),
+                regex: true,
+                case_sensitive: false,
+                occurrence: Occurrence::All,
+            })),
+            RuleSpec::new(RuleKind::new_default("number").unwrap()), // _001, per folder
+            RuleSpec::new(RuleKind::ExtensionCase(ExtCase::Lower)),
+        ];
+        let plan = plan_with(r, &mod_opts(true), &rules);
+        assert_eq!(
+            names(&plan, r),
+            vec![
+                ("IMG_0001.JPG".into(), "March 2024/holiday_001 (1).jpg".into()), // occupied on disk
+                ("IMG_0002.JPG".into(), "March 2024/holiday_002.jpg".into()),
+                ("March 2024/holiday_001.jpg".into(), "March 2024/holiday_001_001.jpg".into()), // renamed in place
+                ("trip/IMG_0003.jpg".into(), "trip/July 2023/holiday_001.jpg".into()),
+            ]
+        );
+        let c = plan.counts();
+        assert_eq!((c.to_move, c.renamed, c.rename_only, c.collisions), (4, 4, 1, 1));
+        let rep = execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert_eq!(fs::read_to_string(r.join("March 2024/holiday_001 (1).jpg")).unwrap(), "1");
+        assert_eq!(fs::read_to_string(r.join("March 2024/holiday_001_001.jpg")).unwrap(), "occupant");
+        assert!(!r.join("March 2024/holiday_001.jpg").exists());
+        assert_eq!(fs::read_to_string(r.join("trip/notes.txt")).unwrap(), "notes");
+        assert_eq!(fs::read_to_string(r.join("trip/IMG_0003.xmp")).unwrap(), "sidecar");
+        // the undo log records original names + locations
+        let log = read_log(rep.undo_log.as_ref().unwrap()).unwrap();
+        assert!(log.moves.iter().any(|m| m.from.ends_with("IMG_0001.JPG") && m.to.ends_with("holiday_001 (1).jpg")));
+        let u = undo(rep.undo_log.as_ref().unwrap(), &mut |_, _| {});
+        assert!(u.errors.is_empty(), "{:?}", u.errors);
+        assert_eq!(snapshot(r), before);
+    }
+
+    #[test]
+    fn same_batch_renames_never_collide() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        for (i, n) in ["a.jpg", "b.JPG", "c.jpeg", "d.png", "sub/e.jpg"].iter().enumerate() {
+            touch(&r.join(n), MAR_2024, &i.to_string());
+        }
+        let before = snapshot(r);
+        // every file -> "photo" in place: a clash for every .jpg-ish name
+        let rules = vec![constant_name("photo"), RuleSpec::new(RuleKind::ExtensionCase(ExtCase::Lower))];
+        let plan = plan_with(r, &mod_opts(false), &rules);
+        assert_eq!(
+            names(&plan, r),
+            vec![
+                ("a.jpg".into(), "photo.jpg".into()),
+                ("b.JPG".into(), "photo (1).jpg".into()),
+                ("c.jpeg".into(), "photo.jpeg".into()),
+                ("d.png".into(), "photo.png".into()),
+                ("sub/e.jpg".into(), "sub/photo.jpg".into()),
+            ]
+        );
+        let rep = execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert_eq!(rep.moved, 5);
+        assert!(!r.join("July 2023").exists() && !r.join("March 2024").exists()); // no folders when sort is off
+        assert_eq!(fs::read_to_string(r.join("photo (1).jpg")).unwrap(), "1");
+        undo(rep.undo_log.as_ref().unwrap(), &mut |_, _| {});
+        assert_eq!(snapshot(r), before);
+    }
+
+    #[test]
+    fn swap_like_chains_are_safe() {
+        // a -> b while b exists and b -> c: no overwrite, a gets a suffix
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("a.jpg"), MAR_2024, "A");
+        touch(&r.join("b.jpg"), MAR_2024, "B");
+        let rules = vec![
+            RuleSpec::new(RuleKind::Replace(ReplaceRule {
+                find: "b".into(),
+                with: "c".into(),
+                regex: false,
+                case_sensitive: true,
+                occurrence: Occurrence::All,
+            })),
+            RuleSpec::new(RuleKind::Replace(ReplaceRule {
+                find: "a".into(),
+                with: "b".into(),
+                regex: false,
+                case_sensitive: true,
+                occurrence: Occurrence::All,
+            })),
+        ];
+        let plan = plan_with(r, &mod_opts(false), &rules);
+        assert_eq!(names(&plan, r), vec![("a.jpg".into(), "b (1).jpg".into()), ("b.jpg".into(), "c.jpg".into())]);
+        let rep = execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        assert!(rep.errors.is_empty());
+        assert_eq!(fs::read_to_string(r.join("b (1).jpg")).unwrap(), "A");
+        assert_eq!(fs::read_to_string(r.join("c.jpg")).unwrap(), "B");
+    }
+
+    #[test]
+    fn case_only_rename_and_undo() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("Photo.JPG"), MAR_2024, "p");
+        touch(&r.join("other.jpg"), MAR_2024, "o");
+        let rules = vec![RuleSpec::new(RuleKind::ExtensionCase(ExtCase::Lower))];
+        let plan = plan_with(r, &mod_opts(false), &rules);
+        assert_eq!(
+            names(&plan, r),
+            vec![("Photo.JPG".into(), "Photo.jpg".into()), ("other.jpg".into(), "<Unchanged>".into())]
+        );
+        assert!(!plan.items[0].renamed_for_collision, "case-only rename must not get a (1) suffix");
+        let rep = execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        let listing = |r: &Path| {
+            let mut v: Vec<String> = fs::read_dir(r)
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| !n.starts_with(UNDO_PREFIX))
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(listing(r), vec!["Photo.jpg", "other.jpg"]);
+        let u = undo(rep.undo_log.as_ref().unwrap(), &mut |_, _| {});
+        assert!(u.errors.is_empty(), "{:?}", u.errors);
+        assert_eq!(listing(r), vec!["Photo.JPG", "other.jpg"]);
+        assert_eq!(fs::read_to_string(r.join("Photo.JPG")).unwrap(), "p");
+    }
+
+    #[test]
+    fn extension_detect_fixes_wrong_extension_and_undo_restores() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        // a PNG saved with a .jpg extension, and a real JPEG
+        let png = b"\x89PNG\r\n\x1a\n0000000000000000";
+        fs::write(r.join("shot.jpg"), png).unwrap();
+        fs::write(r.join("real.jpg"), b"\xff\xd8\xff\xe0rest").unwrap();
+        let rules = vec![RuleSpec::new(RuleKind::Extension(ExtensionRule::Detect))];
+        let plan = plan_with(r, &mod_opts(false), &rules);
+        assert_eq!(
+            names(&plan, r),
+            vec![("real.jpg".into(), "<Unchanged>".into()), ("shot.jpg".into(), "shot.png".into())]
+        );
+        let it = plan.items.iter().find(|i| i.final_name() == "shot.png").unwrap();
+        assert!(it.warnings.iter().any(|w| w.contains("Extension")), "{:?}", it.warnings);
+        let rep = execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert!(r.join("shot.png").exists() && !r.join("shot.jpg").exists());
+        let u = undo(rep.undo_log.as_ref().unwrap(), &mut |_, _| {});
+        assert!(u.errors.is_empty(), "{:?}", u.errors);
+        assert_eq!(fs::read(r.join("shot.jpg")).unwrap(), png.to_vec());
+        assert!(!r.join("shot.png").exists());
+    }
+
+    #[test]
+    fn rename_in_place_when_already_sorted_and_unchanged_otherwise() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("March 2024/x.jpg"), MAR_2024, "x");
+        touch(&r.join("March 2024/keep.JPG"), MAR_2024, "k");
+        let rules = vec![RuleSpec::new(RuleKind::Case(CaseMode::Upper))];
+        let plan = plan_with(r, &mod_opts(true), &rules);
+        assert_eq!(
+            names(&plan, r),
+            vec![
+                ("March 2024/keep.JPG".into(), "March 2024/KEEP.JPG".into()),
+                ("March 2024/x.jpg".into(), "March 2024/X.jpg".into()),
+            ]
+        );
+        assert!(plan.items.iter().all(|i| i.is_rename_only()));
+        // same chain once more after applying: nothing left to do
+        execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        let plan2 = plan_with(r, &mod_opts(true), &rules);
+        assert_eq!(plan2.counts().already_sorted, 2);
+        assert_eq!(plan2.counts().to_move, 0);
+    }
+
+    #[test]
+    fn numbering_restarts_per_folder_and_reserved_names_fixed() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        for n in ["a/1.jpg", "a/2.jpg", "b/1.jpg", "b/2.jpg", "b/3.jpg"] {
+            touch(&r.join(n), MAR_2024, n);
+        }
+        let mut num = RuleKind::new_default("number").unwrap();
+        if let RuleKind::Numbering(n) = &mut num {
+            n.position = Position::Replace;
+            n.padding = 2;
+        }
+        let plan = plan_with(r, &mod_opts(false), &[RuleSpec::new(num)]);
+        let got: Vec<String> = names(&plan, r).into_iter().map(|(_, d)| d).collect();
+        assert_eq!(got, vec!["a/01.jpg", "a/02.jpg", "b/01.jpg", "b/02.jpg", "b/03.jpg"]);
+
+        let plan = plan_with(r, &mod_opts(false), &[constant_name("CON")]);
+        let it = &plan.items[0];
+        assert_eq!(it.new_name, "CON_.jpg");
+        assert!(!it.warnings.is_empty());
+        assert_eq!(plan.counts().warnings, 5);
+    }
+
+    #[test]
+    fn non_media_files_are_never_renamed_by_the_stage() {
+        // even if a caller passes a non-media file to the planner directly
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("notes.txt"), MAR_2024, "t");
+        let exts = crate::scan::parse_extensions("");
+        let stages = stages_with_rules(&[constant_name("x")], &exts).unwrap();
+        let plan =
+            build_plan(r, &[r.join("notes.txt")], &mod_opts(false), &stages, &AtomicBool::new(false), &mut |_, _| {});
+        assert_eq!(plan.items[0].status, Status::Unchanged);
+        assert_eq!(plan.items[0].new_name, "notes.txt");
+        assert!(!plan.items[0].warnings.is_empty());
+    }
+
+    #[test]
+    fn invalid_rules_block_planning() {
+        let bad = RuleSpec::new(RuleKind::Replace(ReplaceRule {
+            find: "[".into(),
+            with: String::new(),
+            regex: true,
+            case_sensitive: false,
+            occurrence: Occurrence::All,
+        }));
+        assert!(stages_with_rules(&[bad], &crate::scan::parse_extensions("")).is_err());
+    }
+
+    #[test]
+    fn long_paths_are_flagged() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("a.jpg"), MAR_2024, "a");
+        let long = "x".repeat(250);
+        let plan = plan_with(r, &mod_opts(true), &[constant_name(&long)]);
+        let it = &plan.items[0];
+        assert_eq!(it.status, Status::Move);
+        assert!(it.warnings.iter().any(|w| w.contains("longer than 260")), "{:?}", it.warnings);
     }
 }

@@ -1,0 +1,2 @@
+Undo log: sample/PhotoSorter-undo-20261025-191940.json
+Undo: restored=17 dirs_removed=10 errors=[]

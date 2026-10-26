@@ -1,0 +1,1 @@
+Apply: moved=17 skipped=0 errors=[] undo_log=Some("sample/PhotoSorter-undo-20261025-191940.json")

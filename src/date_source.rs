@@ -78,7 +78,7 @@ impl DateMode {
         match self {
             DateMode::Auto => "Auto (priority order)",
             DateMode::Only(SourceKind::Filename) => "Detect from filename",
-            DateMode::Only(SourceKind::Exif) => "EXIF date taken",
+            DateMode::Only(SourceKind::Exif) => "EXIF / video date taken",
             DateMode::Only(SourceKind::Modified) => "Modified date",
             DateMode::Only(SourceKind::Created) => "Created date",
         }
@@ -175,6 +175,75 @@ pub fn exif_date(path: &Path) -> Option<NaiveDateTime> {
     None
 }
 
+/// Creation time from the `moov/mvhd` box of MP4 / MOV / M4V / 3GP files
+/// (seconds since 1904-01-01 UTC, converted to local time). Read-only; only
+/// box headers are read, never the media data.
+pub fn video_date(path: &Path) -> Option<NaiveDateTime> {
+    use std::io::{Read, Seek, SeekFrom};
+    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    if !matches!(ext.as_str(), "mp4" | "mov" | "m4v" | "3gp" | "3g2") {
+        return None;
+    }
+    let mut f = std::fs::File::open(path).ok()?;
+    let file_len = f.metadata().ok()?.len();
+
+    // Find box `want` among the boxes in [start, end). Returns (payload start, payload end).
+    fn find_box(f: &mut std::fs::File, start: u64, end: u64, want: &[u8; 4]) -> Option<(u64, u64)> {
+        let mut pos = start;
+        let mut guard = 0;
+        while pos + 8 <= end && guard < 10_000 {
+            guard += 1;
+            f.seek(SeekFrom::Start(pos)).ok()?;
+            let mut h = [0u8; 8];
+            f.read_exact(&mut h).ok()?;
+            let mut size = u32::from_be_bytes([h[0], h[1], h[2], h[3]]) as u64;
+            let mut header = 8;
+            if size == 1 {
+                let mut l = [0u8; 8];
+                f.read_exact(&mut l).ok()?;
+                size = u64::from_be_bytes(l);
+                header = 16;
+            } else if size == 0 {
+                size = end - pos;
+            }
+            if size < header {
+                return None;
+            }
+            if &h[4..8] == want {
+                return Some((pos + header, (pos + size).min(end)));
+            }
+            pos = pos.checked_add(size)?;
+        }
+        None
+    }
+
+    let (ms, me) = find_box(&mut f, 0, file_len, b"moov")?;
+    let (hs, _) = find_box(&mut f, ms, me, b"mvhd")?;
+    f.seek(SeekFrom::Start(hs)).ok()?;
+    let mut vf = [0u8; 4];
+    f.read_exact(&mut vf).ok()?;
+    let secs = if vf[0] == 1 {
+        let mut b = [0u8; 8];
+        f.read_exact(&mut b).ok()?;
+        u64::from_be_bytes(b)
+    } else {
+        let mut b = [0u8; 4];
+        f.read_exact(&mut b).ok()?;
+        u32::from_be_bytes(b) as u64
+    };
+    const MAC_TO_UNIX: u64 = 2_082_844_800;
+    if secs <= MAC_TO_UNIX {
+        return None; // 0 = not set
+    }
+    let utc = DateTime::from_timestamp((secs - MAC_TO_UNIX) as i64, 0)?;
+    let local = utc.with_timezone(&Local).naive_local();
+    use chrono::Datelike;
+    if local.year() < crate::MIN_YEAR || local.year() > crate::max_year() {
+        return None;
+    }
+    Some(local)
+}
+
 /// Try a single source.
 pub fn try_source(
     kind: SourceKind,
@@ -187,7 +256,7 @@ pub fn try_source(
             let name = path.file_name()?.to_string_lossy();
             parse_filename_date(&name, order).map(|f| (f.date, f.datetime))
         }
-        SourceKind::Exif => exif_date(path).map(|dt| (dt.date(), Some(dt))),
+        SourceKind::Exif => exif_date(path).or_else(|| video_date(path)).map(|dt| (dt.date(), Some(dt))),
         SourceKind::Modified => meta?.modified().ok().map(system_time_local).map(|dt| (dt.date(), Some(dt))),
         SourceKind::Created => meta?.created().ok().map(system_time_local).map(|dt| (dt.date(), Some(dt))),
     }
@@ -286,6 +355,41 @@ mod tests {
         assert_eq!(r.date, NaiveDate::from_ymd_opt(2019, 7, 4).unwrap());
         // non-image -> no EXIF
         assert!(exif_date(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml").as_path()).is_none());
+    }
+
+    #[test]
+    fn mp4_creation_time() {
+        // minimal ftyp + moov/mvhd (version 0), creation 2021-06-01 12:00:00 UTC
+        let secs: u32 = (1_622_548_800u64 + 2_082_844_800) as u32;
+        let mut mvhd = vec![0u8, 0, 0, 0];
+        mvhd.extend(secs.to_be_bytes());
+        mvhd.extend(secs.to_be_bytes());
+        mvhd.extend([0u8; 88]);
+        let boxed = |t: &[u8], p: &[u8]| {
+            let mut v = ((p.len() + 8) as u32).to_be_bytes().to_vec();
+            v.extend(t);
+            v.extend(p);
+            v
+        };
+        let mut file = boxed(b"ftyp", b"isom\0\0\0\0isom");
+        file.extend(boxed(b"moov", &boxed(b"mvhd", &mvhd)));
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("clip.mp4");
+        fs::write(&p, &file).unwrap();
+        let dt = video_date(&p).unwrap();
+        let expect = DateTime::from_timestamp(1_622_548_800, 0).unwrap().with_timezone(&Local).naive_local();
+        assert_eq!(dt, expect);
+        let r = try_source(SourceKind::Exif, &p, None, DateOrder::Us).unwrap();
+        assert_eq!(r.0, expect.date());
+        // garbage / truncated files never panic
+        fs::write(&p, b"\0\0\0\x01moov").unwrap();
+        assert!(video_date(&p).is_none());
+        fs::write(&p, &file[..30]).unwrap();
+        assert!(video_date(&p).is_none());
+        // not a video extension -> not parsed
+        let q = dir.path().join("clip.jpg");
+        fs::write(&q, &file).unwrap();
+        assert!(video_date(&q).is_none());
     }
 
     #[test]

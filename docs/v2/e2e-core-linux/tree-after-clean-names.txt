@@ -1,0 +1,35 @@
+.
+./2024-03-15 142530.jpg
+./Already sorted
+./Already sorted/March 2024
+./Already sorted/March 2024/2024-03-20 090000.jpg
+./Documents
+./Documents/report.pdf
+./Documents/todo.txt
+./Downloads
+./Downloads/Disguised Png.jpg
+./Downloads/Image.png
+./Downloads/README.txt
+./Downloads/Wallpaper Final V2.jpg
+./Holiday 2023
+./Holiday 2023/0001.JPG
+./Holiday 2023/0002.jpg
+./Holiday 2023/2023-07-04 101500.jpg
+./Holiday 2023/DSC_0001.JPG.xmp
+./Holiday 2023/DSC_0002.jpg.json
+./Holiday 2023/Ete A Paris – Copy.jpg
+./Holiday 2023/Videos
+./Holiday 2023/Videos/Clip.MP4
+./Phone
+./Phone/DCIM
+./Phone/DCIM/Camera
+./Phone/DCIM/Camera/2024-01-01 120000.mp4
+./Phone/DCIM/Camera/2024-01-01 120500 (1).jpg
+./Phone/DCIM/Camera/2024-01-01 120500.jpg
+./Photo (1).JPG
+./Photo (2).JPG
+./Photo.JPG
+./PhotoSorter-undo-20261025-192032.json
+./Screenshot 2024-03-15 At 10.22.01.png
+./notes.txt
+./receipt.pdf

@@ -1,0 +1,30 @@
+Preset: Clean names
+Rules (7):
+  1. [x] Regular expressions - Replace regex “^(IMG|VID|DSC)_” with “”
+  2. [x] Reformat date - Reformat dates “%Y%m%d” → “%Y-%m-%d”
+  3. [x] Replace - Replace text “ (1)” with “”
+  4. [x] Clean up - Trim / clean up the name
+  5. [x] Translit - Transliterate to Latin letters (é→e, ß→ss, Ж→Zh …)
+  6. [x] Case - Change case to Title Case
+  7. [ ] Insert - Insert “x” at the start
+
+BEFORE                                        | AFTER                                            | DEST FOLDER            | STATUS     | notes
+Already sorted/March 2024/IMG_20240320_090000.jpg | 2024-03-20 090000.jpg                            | Already sorted/March 2024 | Move       | 
+Downloads/disguised_png.jpg                   | Disguised Png.jpg                                | Downloads              | Move       | 
+Downloads/image.png                           | Image.png                                        | Downloads              | Move       | 
+Downloads/wallpaper   final__v2..jpg          | Wallpaper Final V2.jpg                           | Downloads              | Move       | 
+Holiday 2023/DSC_0001.JPG                     | 0001.JPG                                         | Holiday 2023           | Move       | 
+Holiday 2023/DSC_0002.jpg                     | 0002.jpg                                         | Holiday 2023           | Move       | 
+Holiday 2023/IMG_20230704_101500.jpg          | 2023-07-04 101500.jpg                            | Holiday 2023           | Move       | 
+Holiday 2023/Videos/clip.MP4                  | Clip.MP4                                         | Holiday 2023/Videos    | Move       | 
+Holiday 2023/été à Paris – copy.jpg           | Ete A Paris – Copy.jpg                           | Holiday 2023           | Move       | 
+IMG_20240315_142530.jpg                       | 2024-03-15 142530.jpg                            | .                      | Move       | 
+Phone/DCIM/Camera/IMG_20240101_120500 (1).jpg | 2024-01-01 120500.jpg                            | Phone/DCIM/Camera      | Move       | 
+Phone/DCIM/Camera/IMG_20240101_120500.jpg     | 2024-01-01 120500 (1).jpg                        | Phone/DCIM/Camera      | Move       | [collision suffix] 
+Phone/DCIM/Camera/VID_20240101_120000.mp4     | 2024-01-01 120000.mp4                            | Phone/DCIM/Camera      | Move       | 
+Screenshot 2024-03-15 at 10.22.01.png         | Screenshot 2024-03-15 At 10.22.01.png            | .                      | Move       | 
+photo (1).JPG                                 | Photo.JPG                                        | .                      | Move       | 
+photo (2).JPG                                 | Photo (2).JPG                                    | .                      | Move       | 
+photo.JPG                                     | Photo (1).JPG                                    | .                      | Move       | [collision suffix] 
+
+Counts: total=17 to_move=17 renamed=17 rename_only=17 collisions=2 already_sorted=0 unchanged=0 no_date=0 errors=0 warnings=0 new_folders=0
