@@ -1,5 +1,9 @@
 //! egui front-end. All real work happens in the `photo_sorter` library on a
 //! background thread; this module only draws state and forwards actions.
+//!
+//! Layout: one window, top to bottom in the order the pipeline runs:
+//! 1. Source & filter  2. Rename rules  3. Output folder (Month YYYY)
+//! 4. Live preview table  5. Apply / Undo bar.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,6 +22,11 @@ use photo_sorter::date_source::{DateMode, Fallback, SourceKind};
 use photo_sorter::filename_date::DateOrder;
 use photo_sorter::ops::{self, RunReport, UndoReport};
 use photo_sorter::plan::{self, Plan, PlanOptions, Status};
+use photo_sorter::rename::{
+    self, AddTextRule, CaseMode, CleanRule, DateRule, DeleteFrom, DeleteRule, DeleteUntil, ExtCase, ExtensionRule,
+    NumberSystem, NumberingRule, Occurrence, PaddingRule, ParentRule, Position, RULE_TYPES, RandomizeRule,
+    RearrangeRule, ReformatDateRule, RemoveMode, ReplaceRule, RuleKind, RuleSpec, StripRule,
+};
 use photo_sorter::scan;
 use photo_sorter::settings::{self, Loaded, Settings, Theme};
 use photo_sorter::template::format_folder_name;
@@ -26,9 +35,17 @@ use photo_sorter::template::format_folder_name;
 // Background work
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
+struct ScanCache {
+    sig: String,
+    files: Arc<Vec<PathBuf>>,
+    errors: Vec<(PathBuf, String)>,
+    dirs: usize,
+}
+
 enum Msg {
     Progress { text: String, frac: f32 },
-    Planned { plan: Plan, scan_errors: Vec<(PathBuf, String)>, dirs: usize, cancelled: bool },
+    Planned { plan: Plan, scan: ScanCache, cancelled: bool },
     Applied(RunReport),
     Undone(UndoReport),
 }
@@ -79,6 +96,9 @@ impl Ticker {
     }
 }
 
+/// Wait this long after the last edit before re-running the live preview.
+const DEBOUNCE: Duration = Duration::from_millis(350);
+
 // ---------------------------------------------------------------------------
 // Table state
 // ---------------------------------------------------------------------------
@@ -86,38 +106,47 @@ impl Ticker {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SortCol {
     File,
+    NewName,
     Current,
     Dest,
     Date,
-    Source,
     Status,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StatusFilter {
     All,
+    Changes,
+    Renamed,
     Move,
-    Sorted,
+    Collision,
+    Warnings,
+    Unchanged,
     NoDate,
     Error,
-    Collision,
 }
 
 impl StatusFilter {
-    const ALL: [StatusFilter; 6] = [
+    const ALL: [StatusFilter; 9] = [
         StatusFilter::All,
+        StatusFilter::Changes,
+        StatusFilter::Renamed,
         StatusFilter::Move,
         StatusFilter::Collision,
-        StatusFilter::Sorted,
+        StatusFilter::Warnings,
+        StatusFilter::Unchanged,
         StatusFilter::NoDate,
         StatusFilter::Error,
     ];
     fn label(self) -> &'static str {
         match self {
-            StatusFilter::All => "All statuses",
-            StatusFilter::Move => "Will move",
-            StatusFilter::Collision => "Renamed (collision)",
-            StatusFilter::Sorted => "Already sorted",
+            StatusFilter::All => "All files",
+            StatusFilter::Changes => "Will change",
+            StatusFilter::Renamed => "Renamed",
+            StatusFilter::Move => "Moved to another folder",
+            StatusFilter::Collision => "Name clash (suffix added)",
+            StatusFilter::Warnings => "With notes / warnings",
+            StatusFilter::Unchanged => "Unchanged / already sorted",
             StatusFilter::NoDate => "No date",
             StatusFilter::Error => "Errors",
         }
@@ -125,9 +154,12 @@ impl StatusFilter {
     fn matches(self, it: &plan::PlanItem) -> bool {
         match self {
             StatusFilter::All => true,
-            StatusFilter::Move => it.status == Status::Move,
+            StatusFilter::Changes => it.status == Status::Move,
+            StatusFilter::Renamed => it.is_renamed(),
+            StatusFilter::Move => it.status == Status::Move && !it.is_rename_only(),
             StatusFilter::Collision => it.status == Status::Move && it.renamed_for_collision,
-            StatusFilter::Sorted => it.status == Status::AlreadySorted,
+            StatusFilter::Warnings => !it.warnings.is_empty(),
+            StatusFilter::Unchanged => matches!(it.status, Status::AlreadySorted | Status::Unchanged),
             StatusFilter::NoDate => it.status == Status::NoDate,
             StatusFilter::Error => matches!(it.status, Status::Error(_)),
         }
@@ -146,6 +178,14 @@ enum Confirm {
     Undo { log: PathBuf, moves: usize, started: String },
 }
 
+enum RuleAction {
+    Up,
+    Down,
+    Duplicate,
+    Delete,
+    ToggleOpen,
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -162,9 +202,18 @@ pub struct App {
     counts: plan::PlanCounts,
     folder_rows: Vec<(PathBuf, usize, bool)>,
     source_summary: String,
+    /// Signature of the options the current plan was built with.
     plan_sig: String,
+    plan_cancelled: bool,
+    scan_cache: Option<ScanCache>,
     scan_errors: Vec<(PathBuf, String)>,
     dirs_scanned: usize,
+
+    /// Live preview bookkeeping.
+    seen_sig: String,
+    changed_at: Option<Instant>,
+    auto_paused: bool,
+    rule_errors: Vec<(usize, String)>,
 
     worker: Option<Worker>,
     progress_text: String,
@@ -177,10 +226,16 @@ pub struct App {
     tab: Tab,
     filter_text: String,
     filter_status: StatusFilter,
-    filter_source: Option<SourceKind>,
     sort: (SortCol, bool),
     view: Vec<usize>,
     view_dirty: bool,
+
+    open_source: bool,
+    open_rules: bool,
+    open_output: bool,
+    open_rule: Option<usize>,
+    preset_sel: String,
+    preset_name: String,
 
     confirm: Option<Confirm>,
     undo_cache: (String, Option<PathBuf>),
@@ -207,25 +262,36 @@ impl App {
             folder_rows: vec![],
             source_summary: String::new(),
             plan_sig: String::new(),
+            plan_cancelled: false,
+            scan_cache: None,
             scan_errors: vec![],
             dirs_scanned: 0,
+            seen_sig: String::new(),
+            changed_at: None,
+            auto_paused: false,
+            rule_errors: vec![],
             worker: None,
             progress_text: String::new(),
             progress: 0.0,
             status: if s.last_folder.trim().is_empty() {
-                "Choose a folder, then click Preview.".into()
+                "Choose a folder — the preview updates live; nothing changes until you click Apply.".into()
             } else {
-                "Ready — click “Preview (dry run)” to see what would happen.".into()
+                "Ready.".into()
             },
             run_report: None,
             undo_report: None,
             tab: Tab::Files,
             filter_text: String::new(),
             filter_status: StatusFilter::All,
-            filter_source: None,
             sort: (SortCol::Current, true),
             view: vec![],
             view_dirty: true,
+            open_source: true,
+            open_rules: true,
+            open_output: true,
+            open_rule: None,
+            preset_sel: String::new(),
+            preset_name: String::new(),
             confirm: None,
             undo_cache: (String::from("\0"), None),
             applied_theme: None,
@@ -239,18 +305,26 @@ impl App {
     }
 
     fn plan_options(&self) -> PlanOptions {
-        PlanOptions { template: self.s.folder_template.clone(), date: self.s.date.clone() }
+        PlanOptions {
+            template: self.s.folder_template.clone(),
+            date: self.s.date.clone(),
+            sort_into_folders: self.s.sort_into_folders,
+        }
+    }
+
+    fn scan_signature(&self) -> String {
+        format!("{:?}|{}|{}", self.s.folder_trimmed(), self.s.include_subfolders, self.s.extensions)
     }
 
     /// Everything that influences the plan. If it changes, the preview is stale.
     fn signature(&self) -> String {
         format!(
-            "{:?}|{}|{}|{:?}|{}",
-            self.s.folder_trimmed(),
-            self.s.include_subfolders,
-            self.s.extensions,
+            "{}|{:?}|{}|{}|{:?}",
+            self.scan_signature(),
             self.s.date,
-            self.s.folder_template
+            self.s.folder_template,
+            self.s.sort_into_folders,
+            self.s.rules
         )
     }
 
@@ -258,8 +332,12 @@ impl App {
         self.worker.is_some()
     }
 
-    fn plan_is_stale(&self) -> bool {
-        self.plan.is_some() && self.plan_sig != self.signature()
+    fn busy_kind(&self) -> Option<JobKind> {
+        self.worker.as_ref().map(|w| w.kind)
+    }
+
+    fn plan_is_current(&self) -> bool {
+        self.plan.is_some() && !self.plan_cancelled && self.plan_sig == self.signature()
     }
 
     fn save_settings(&mut self) {
@@ -274,6 +352,16 @@ impl App {
     fn sync_order(&mut self) {
         let order: Vec<SourceKind> = self.order_ui.iter().filter(|(_, on)| *on).map(|(k, _)| *k).collect();
         self.s.date.auto_order = order;
+    }
+
+    fn rebuild_order_ui(&mut self) {
+        let mut order_ui: Vec<(SourceKind, bool)> = self.s.date.auto_order.iter().map(|k| (*k, true)).collect();
+        for k in SourceKind::ALL {
+            if !self.s.date.auto_order.contains(&k) {
+                order_ui.push((k, false));
+            }
+        }
+        self.order_ui = order_ui;
     }
 
     fn set_folder(&mut self, p: &Path) {
@@ -296,56 +384,114 @@ impl App {
         self.undo_cache.0 = "\0".into();
     }
 
+    /// Force a fresh scan + preview (disk may have changed).
+    fn refresh(&mut self) {
+        self.scan_cache = None;
+        self.plan_sig.clear();
+        self.auto_paused = false;
+        self.changed_at = Some(Instant::now() - DEBOUNCE);
+    }
+
+    // ----- live preview driver -----
+
+    fn drive_live_preview(&mut self, ctx: &egui::Context) {
+        let sig = self.signature();
+        if sig != self.seen_sig {
+            self.seen_sig = sig.clone();
+            self.changed_at = Some(Instant::now());
+            self.auto_paused = false;
+            self.rule_errors = rename::validate_chain(&self.s.rules);
+        }
+        if matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo)) || self.auto_paused {
+            return;
+        }
+        if self.plan_sig == sig {
+            return;
+        }
+        let root = self.root();
+        if self.s.folder_trimmed().is_empty() || !root.is_dir() || !self.rule_errors.is_empty() {
+            return;
+        }
+        let Some(t) = self.changed_at else { return };
+        let waited = t.elapsed();
+        if waited >= DEBOUNCE {
+            self.changed_at = None;
+            self.start_preview(ctx);
+        } else {
+            ctx.request_repaint_after(DEBOUNCE - waited);
+        }
+    }
+
     // ----- actions -----
 
     fn start_preview(&mut self, ctx: &egui::Context) {
+        if let Some(w) = self.worker.take() {
+            if w.kind != JobKind::Preview {
+                self.worker = Some(w);
+                return;
+            }
+            w.cancel.store(true, Ordering::Relaxed); // superseded
+        }
         let root = self.root();
         if !root.is_dir() {
             self.status = "Please choose an existing folder first.".into();
             return;
         }
-        self.save_settings();
-        let recursive = self.s.include_subfolders;
         let exts = scan::parse_extensions(&self.s.extensions);
+        let stages = match plan::stages_with_rules(&self.s.rules, &exts) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = e;
+                return;
+            }
+        };
+        let recursive = self.s.include_subfolders;
         let opts = self.plan_options();
+        let scan_sig = self.scan_signature();
+        let cached = self.scan_cache.clone().filter(|c| c.sig == scan_sig);
         self.plan_sig = self.signature();
-        self.run_report = None;
-        self.undo_report = None;
         self.progress = 0.0;
-        self.status = "Scanning…".into();
+        self.status = "Building preview…".into();
         self.worker = Some(spawn(ctx, JobKind::Preview, move |tx, cancel, ctx| {
-            let mut t = Ticker::new();
-            let res = scan::scan(&root, recursive, &exts, &cancel, &mut |n, dir| {
-                if t.due() {
-                    let _ = tx.send(Msg::Progress {
-                        text: format!("Scanning… {n} images found — {}", dir.display()),
-                        frac: 0.0,
+            let sc = match cached {
+                Some(c) => c,
+                None => {
+                    let mut t = Ticker::new();
+                    let res = scan::scan(&root, recursive, &exts, &cancel, &mut |n, dir| {
+                        if t.due() {
+                            let _ = tx.send(Msg::Progress {
+                                text: format!("Scanning… {n} files found — {}", dir.display()),
+                                frac: 0.0,
+                            });
+                            ctx.request_repaint();
+                        }
                     });
-                    ctx.request_repaint();
+                    ScanCache {
+                        sig: if cancel.load(Ordering::Relaxed) { String::new() } else { scan_sig },
+                        files: Arc::new(res.files),
+                        errors: res.errors,
+                        dirs: res.dirs_scanned,
+                    }
                 }
-            });
+            };
             let mut t = Ticker::new();
-            let plan = plan::build_plan(&root, &res.files, &opts, &plan::default_stages(), &cancel, &mut |i, n| {
+            let plan = plan::build_plan(&root, &sc.files, &opts, &stages, &cancel, &mut |i, n| {
                 if t.due() {
                     let _ = tx.send(Msg::Progress {
-                        text: format!("Reading dates… {i} / {n}"),
+                        text: format!("Reading dates and applying rules… {i} / {n}"),
                         frac: if n == 0 { 1.0 } else { i as f32 / n as f32 },
                     });
                     ctx.request_repaint();
                 }
             });
-            let _ = tx.send(Msg::Planned {
-                plan,
-                scan_errors: res.errors,
-                dirs: res.dirs_scanned,
-                cancelled: cancel.load(Ordering::Relaxed),
-            });
+            let _ = tx.send(Msg::Planned { plan, scan: sc, cancelled: cancel.load(Ordering::Relaxed) });
         }));
     }
 
     fn start_apply(&mut self, ctx: &egui::Context) {
         let Some(plan) = self.plan.clone() else { return };
-        self.status = "Moving files…".into();
+        self.save_settings();
+        self.status = "Renaming / moving files…".into();
         self.progress = 0.0;
         self.worker = Some(spawn(ctx, JobKind::Apply, move |tx, cancel, ctx| {
             let mut t = Ticker::new();
@@ -353,7 +499,7 @@ impl App {
                 if t.due() {
                     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     let _ = tx.send(Msg::Progress {
-                        text: format!("Moving {i} / {n}  {name}"),
+                        text: format!("Processing {i} / {n}  {name}"),
                         frac: if n == 0 { 1.0 } else { i as f32 / n as f32 },
                     });
                     ctx.request_repaint();
@@ -364,6 +510,9 @@ impl App {
     }
 
     fn start_undo(&mut self, ctx: &egui::Context, log: PathBuf) {
+        if let Some(w) = self.worker.take() {
+            w.cancel.store(true, Ordering::Relaxed);
+        }
         self.status = "Undoing last run…".into();
         self.progress = 0.0;
         self.worker = Some(spawn(ctx, JobKind::Undo, move |tx, _cancel, ctx| {
@@ -381,6 +530,17 @@ impl App {
         }));
     }
 
+    /// After apply / undo: the disk changed, so forget the scan; do not
+    /// re-preview automatically (keep the results visible).
+    fn after_disk_change(&mut self) {
+        self.scan_cache = None;
+        self.plan = None;
+        self.view.clear();
+        self.tab = Tab::Results;
+        self.plan_sig = self.signature();
+        self.invalidate_undo_cache();
+    }
+
     fn poll_worker(&mut self) {
         let Some(w) = &self.worker else { return };
         let msgs: Vec<Msg> = w.rx.try_iter().collect();
@@ -391,18 +551,25 @@ impl App {
                     self.progress_text = text;
                     self.progress = frac;
                 }
-                Msg::Planned { plan, scan_errors, dirs, cancelled } => {
+                Msg::Planned { plan, scan, cancelled } => {
                     let c = plan.counts();
                     self.status = if cancelled {
-                        "Preview cancelled (partial results shown; Apply is disabled).".into()
+                        "Preview cancelled (partial results shown; Apply is disabled). Click “Refresh preview” to run it again.".into()
                     } else {
+                        let moved = c.to_move - c.rename_only;
                         format!(
-                            "Preview ready: {} images in {} folders — {} to move, {} already sorted, {} without date. Nothing has been changed yet.",
-                            c.total, dirs, c.to_move, c.already_sorted, c.no_date
+                            "Preview: {} files in {} folders — {} renamed, {} moved to Month folders, {} unchanged/already sorted, {} without date. Nothing has been changed yet.",
+                            c.total,
+                            scan.dirs,
+                            c.renamed,
+                            moved,
+                            c.already_sorted + c.unchanged,
+                            c.no_date
                         )
                     };
+                    self.plan_cancelled = cancelled;
                     if cancelled {
-                        self.plan_sig = "cancelled".into();
+                        self.auto_paused = true;
                     }
                     self.counts = c;
                     let mut map: BTreeMap<PathBuf, (usize, bool)> = BTreeMap::new();
@@ -420,39 +587,39 @@ impl App {
                     let txt: Vec<String> = by_src.iter().map(|(k, n)| format!("{}: {n}", k.label())).collect();
                     self.source_summary = if txt.is_empty() { "none".into() } else { txt.join("  ·  ") };
                     self.plan = Some(plan);
-                    self.scan_errors = scan_errors;
-                    self.dirs_scanned = dirs;
+                    self.scan_errors = scan.errors.clone();
+                    self.dirs_scanned = scan.dirs;
+                    if !scan.sig.is_empty() {
+                        self.scan_cache = Some(scan);
+                    }
                     self.view_dirty = true;
-                    self.tab = Tab::Files;
+                    if self.tab == Tab::Results {
+                        self.tab = Tab::Files;
+                    }
                     finished = true;
                 }
                 Msg::Applied(rep) => {
                     self.status = format!(
-                        "Done: {} moved, {} errors{}. {}",
+                        "Done: {} files renamed/moved, {} errors{}. {}",
                         rep.moved,
                         rep.errors.len(),
                         if rep.cancelled { " (cancelled)" } else { "" },
                         rep.undo_log.as_ref().map(|p| format!("Undo log: {}", p.display())).unwrap_or_default()
                     );
                     self.run_report = Some(rep);
-                    self.plan = None;
-                    self.view.clear();
-                    self.tab = Tab::Results;
-                    self.invalidate_undo_cache();
+                    self.undo_report = None;
+                    self.after_disk_change();
                     finished = true;
                 }
                 Msg::Undone(rep) => {
                     self.status = format!(
-                        "Undo: {} files restored, {} empty folders removed, {} problems.",
+                        "Undo: {} files restored to their original names and folders, {} empty folders removed, {} problems.",
                         rep.restored,
                         rep.dirs_removed,
                         rep.errors.len()
                     );
                     self.undo_report = Some(rep);
-                    self.plan = None;
-                    self.view.clear();
-                    self.tab = Tab::Results;
-                    self.invalidate_undo_cache();
+                    self.after_disk_change();
                     finished = true;
                 }
             }
@@ -476,10 +643,6 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(_, it)| self.filter_status.matches(it))
-            .filter(|(_, it)| match self.filter_source {
-                None => true,
-                Some(k) => it.date.map(|d| d.source) == Some(k),
-            })
             .filter(|(_, it)| {
                 needle.is_empty()
                     || it.source.to_string_lossy().to_lowercase().contains(&needle)
@@ -495,17 +658,16 @@ impl App {
             let (x, y) = (&items[a], &items[b]);
             let o = match col {
                 SortCol::File => name(a).cmp(&name(b)),
+                SortCol::NewName => x.final_name().to_lowercase().cmp(&y.final_name().to_lowercase()),
                 SortCol::Current => x.current_dir.cmp(&y.current_dir).then_with(|| name(a).cmp(&name(b))),
                 SortCol::Dest => x.dest_path.cmp(&y.dest_path),
                 SortCol::Date => x.date.map(|d| (d.date, d.datetime)).cmp(&y.date.map(|d| (d.date, d.datetime))),
-                SortCol::Source => x.date.map(|d| d.source).cmp(&y.date.map(|d| d.source)),
-                SortCol::Status => x.status.label().cmp(y.status.label()),
+                SortCol::Status => status_text(x).cmp(&status_text(y)),
             };
             if asc { o } else { o.reverse() }
         });
         self.view = v;
     }
-
     fn apply_style(&mut self, ctx: &egui::Context) {
         if self.applied_theme == Some(self.s.theme) && self.applied_font == self.s.font_size {
             return;
@@ -558,26 +720,6 @@ fn accent(ui: &egui::Ui) -> Color32 {
     if ui.visuals().dark_mode { Color32::from_rgb(90, 160, 255) } else { Color32::from_rgb(30, 100, 200) }
 }
 
-fn section<R>(ui: &mut egui::Ui, num: &str, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let fill = ui.visuals().faint_bg_color;
-    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-    egui::Frame::new()
-        .fill(fill)
-        .stroke(stroke)
-        .corner_radius(CornerRadius::same(10))
-        .inner_margin(Margin::same(12))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(num).strong().color(accent(ui)));
-                ui.label(RichText::new(title).strong().size(ui.style().text_styles[&TextStyle::Body].size * 1.12));
-            });
-            ui.add_space(4.0);
-            add(ui)
-        })
-        .inner
-}
-
 fn chip(ui: &mut egui::Ui, label: &str, value: usize, color: Color32) {
     egui::Frame::new()
         .fill(color.gamma_multiply(0.18))
@@ -620,6 +762,7 @@ fn status_color(s: &Status, renamed: bool) -> Color32 {
         Status::AlreadySorted => grey(),
         Status::NoDate => amber(),
         Status::Error(_) => red(),
+        Status::Unchanged => grey(),
     }
 }
 
@@ -652,6 +795,525 @@ pub fn app_icon() -> egui::IconData {
     egui::IconData { rgba: include_bytes!("../assets/icon64.rgba").to_vec(), width: 64, height: 64 }
 }
 
+fn status_text(it: &plan::PlanItem) -> String {
+    match &it.status {
+        Status::Move => {
+            let renamed = it.is_renamed();
+            let mut s = match (it.is_rename_only(), renamed) {
+                (true, _) => "Rename".to_string(),
+                (false, true) => "Rename + move".to_string(),
+                (false, false) => "Move".to_string(),
+            };
+            if it.renamed_for_collision {
+                s.push_str(" (clash → suffix)");
+            }
+            s
+        }
+        s => s.label().to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rule editor widgets (free functions: they only touch the rule)
+// ---------------------------------------------------------------------------
+
+const POS_LABELS: [&str; 7] = [
+    "Prefix (at the start)",
+    "Suffix (at the end)",
+    "At position N",
+    "N chars before the end",
+    "After text",
+    "Before text",
+    "Replace current name",
+];
+
+fn position_editor(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, pos: &mut Position) {
+    let cur = match pos {
+        Position::Prefix => 0,
+        Position::Suffix => 1,
+        Position::At(_) => 2,
+        Position::FromEnd(_) => 3,
+        Position::AfterText(_) => 4,
+        Position::BeforeText(_) => 5,
+        Position::Replace => 6,
+    };
+    let mut k = cur;
+    egui::ComboBox::from_id_salt(id).width(190.0).selected_text(POS_LABELS[k]).show_ui(ui, |ui| {
+        for (i, l) in POS_LABELS.iter().enumerate() {
+            ui.selectable_value(&mut k, i, *l);
+        }
+    });
+    let n = match pos {
+        Position::At(n) | Position::FromEnd(n) => *n,
+        _ => 1,
+    };
+    let t = match pos {
+        Position::AfterText(t) | Position::BeforeText(t) => t.clone(),
+        _ => String::new(),
+    };
+    if k != cur {
+        *pos = match k {
+            0 => Position::Prefix,
+            1 => Position::Suffix,
+            2 => Position::At(n),
+            3 => Position::FromEnd(n),
+            4 => Position::AfterText(t),
+            5 => Position::BeforeText(t),
+            _ => Position::Replace,
+        };
+    }
+    match pos {
+        Position::At(n) | Position::FromEnd(n) => {
+            ui.add(egui::DragValue::new(n).range(0..=255).prefix("N = "));
+        }
+        Position::AfterText(t) | Position::BeforeText(t) => {
+            text_field(ui, t, "text", 110.0);
+        }
+        _ => {}
+    }
+}
+
+fn text_field(ui: &mut egui::Ui, s: &mut String, hint: &str, width: f32) {
+    ui.add(egui::TextEdit::singleline(s).hint_text(hint).desired_width(width));
+}
+
+/// Editor for one rule's settings.
+fn rule_editor(ui: &mut egui::Ui, idx: usize, kind: &mut RuleKind) {
+    let w = 220.0;
+    egui::Grid::new(("rule-grid", idx)).num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| match kind {
+        RuleKind::Replace(r) => {
+            let ReplaceRule { find, with, regex, case_sensitive, occurrence } = r;
+            ui.label("Find");
+            text_field(ui, find, if *regex { r"regex, e.g. ^IMG_(\d+)" } else { "text to find" }, w);
+            ui.end_row();
+            ui.label("Replace with");
+            text_field(ui, with, if *regex { "text, $1 = group 1" } else { "(empty = remove)" }, w);
+            ui.end_row();
+            ui.label("");
+            ui.horizontal(|ui| {
+                ui.checkbox(regex, "Regular expression");
+                ui.checkbox(case_sensitive, "Case-sensitive");
+            });
+            ui.end_row();
+            ui.label("Occurrences");
+            ui.horizontal(|ui| {
+                ui.radio_value(occurrence, Occurrence::All, "All");
+                ui.radio_value(occurrence, Occurrence::First, "First");
+                ui.radio_value(occurrence, Occurrence::Last, "Last");
+            });
+            ui.end_row();
+        }
+        RuleKind::Remove(m) => {
+            let labels = [
+                "Text (occurrences)",
+                "Any of these characters",
+                "First N characters",
+                "Last N characters",
+                "Range (from–to)",
+                "All whitespace",
+                "All digits",
+            ];
+            let cur = match m {
+                RemoveMode::Text { .. } => 0,
+                RemoveMode::Chars { .. } => 1,
+                RemoveMode::First(_) => 2,
+                RemoveMode::Last(_) => 3,
+                RemoveMode::Range { .. } => 4,
+                RemoveMode::Whitespace => 5,
+                RemoveMode::Digits => 6,
+            };
+            let mut k = cur;
+            ui.label("Remove");
+            egui::ComboBox::from_id_salt(("rm-mode", idx)).width(w).selected_text(labels[k]).show_ui(ui, |ui| {
+                for (i, l) in labels.iter().enumerate() {
+                    ui.selectable_value(&mut k, i, *l);
+                }
+            });
+            ui.end_row();
+            if k != cur {
+                *m = match k {
+                    0 => RemoveMode::Text { text: String::new(), occurrence: Occurrence::All, case_sensitive: false },
+                    1 => RemoveMode::Chars { chars: String::new(), case_sensitive: false },
+                    2 => RemoveMode::First(1),
+                    3 => RemoveMode::Last(1),
+                    4 => RemoveMode::Range { from: 1, to: 1 },
+                    5 => RemoveMode::Whitespace,
+                    _ => RemoveMode::Digits,
+                };
+            }
+            match m {
+                RemoveMode::Text { text, occurrence, case_sensitive } => {
+                    ui.label("Text");
+                    text_field(ui, text, "text to remove", w);
+                    ui.end_row();
+                    ui.label("Occurrences");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(occurrence, Occurrence::All, "All");
+                        ui.radio_value(occurrence, Occurrence::First, "First");
+                        ui.radio_value(occurrence, Occurrence::Last, "Last");
+                        ui.checkbox(case_sensitive, "Case-sensitive");
+                    });
+                    ui.end_row();
+                }
+                RemoveMode::Chars { chars, case_sensitive } => {
+                    ui.label("Characters");
+                    ui.horizontal(|ui| {
+                        text_field(ui, chars, "e.g. ()[]#", 140.0);
+                        ui.checkbox(case_sensitive, "Case-sensitive");
+                    });
+                    ui.end_row();
+                }
+                RemoveMode::First(n) | RemoveMode::Last(n) => {
+                    ui.label("N");
+                    ui.add(egui::DragValue::new(n).range(0..=255));
+                    ui.end_row();
+                }
+                RemoveMode::Range { from, to } => {
+                    ui.label("Positions");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::DragValue::new(from).range(1..=255).prefix("from "));
+                        ui.add(egui::DragValue::new(to).range(1..=255).prefix("to "));
+                        ui.label(RichText::new("(1 = first character)").weak().small());
+                    });
+                    ui.end_row();
+                }
+                _ => {}
+            }
+        }
+        RuleKind::AddText(AddTextRule { text, position }) => {
+            ui.label("Text");
+            text_field(ui, text, "text to add", w);
+            ui.end_row();
+            ui.label("Where");
+            ui.horizontal(|ui| position_editor(ui, ("add-pos", idx), position));
+            ui.end_row();
+        }
+        RuleKind::Numbering(NumberingRule {
+            start,
+            step,
+            padding,
+            position,
+            separator,
+            per_folder,
+            repeat,
+            reset_every,
+            system,
+        }) => {
+            ui.label("Index");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(start).prefix("starts at "));
+                ui.add(egui::DragValue::new(step).prefix("step "));
+                ui.add(egui::DragValue::new(repeat).range(1..=1000).prefix("repeat "));
+                ui.add(egui::DragValue::new(reset_every).range(0..=100000).prefix("reset every "))
+                    .on_hover_text("Start again after this many files (0 = never)");
+            });
+            ui.end_row();
+            ui.label("Numbering");
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt(("num-sys", idx)).width(200.0).selected_text(system.label()).show_ui(
+                    ui,
+                    |ui| {
+                        for n in NumberSystem::ALL {
+                            ui.selectable_value(system, n, n.label());
+                        }
+                    },
+                );
+                if *system == NumberSystem::Decimal {
+                    ui.add(egui::DragValue::new(padding).range(0..=32).prefix("pad with zeros to "));
+                }
+            });
+            ui.end_row();
+            ui.label("Where");
+            ui.horizontal(|ui| position_editor(ui, ("num-pos", idx), position));
+            ui.end_row();
+            ui.label("Separator");
+            text_field(ui, separator, "between name and number", 120.0);
+            ui.end_row();
+            ui.label("");
+            ui.checkbox(per_folder, "Reset if folder changes");
+            ui.end_row();
+        }
+        RuleKind::Case(c) => {
+            ui.label("Case");
+            ui.horizontal_wrapped(|ui| {
+                for m in CaseMode::ALL {
+                    ui.radio_value(c, m, m.label());
+                }
+            });
+            ui.end_row();
+        }
+        RuleKind::Clean(CleanRule {
+            trim,
+            collapse_spaces,
+            underscores_to_spaces,
+            spaces_to_underscores,
+            dots_to_spaces,
+            remove_illegal,
+            collapse_repeats,
+            strip_brackets,
+            normalize_spaces,
+            strip_emoji,
+            strip_marks,
+            space_before_capitals,
+        }) => {
+            ui.label("Clean up");
+            ui.vertical(|ui| {
+                ui.checkbox(strip_brackets, "Strip out content of brackets (…) […] {…}");
+                ui.checkbox(normalize_spaces, "Normalize unicode spaces");
+                ui.checkbox(strip_emoji, "Strip emoji");
+                ui.checkbox(strip_marks, "Strip accents / marks (é → e)");
+                ui.checkbox(space_before_capitals, "Insert a space before capital letters");
+                ui.checkbox(trim, "Trim spaces, _ - . at start and end");
+                ui.checkbox(collapse_spaces, "Collapse multiple spaces");
+                ui.checkbox(collapse_repeats, "Collapse repeated _ - . separators");
+                ui.checkbox(underscores_to_spaces, "Underscores → spaces");
+                ui.checkbox(spaces_to_underscores, "Spaces → underscores");
+                ui.checkbox(dots_to_spaces, "Dots → spaces");
+                ui.checkbox(remove_illegal, "Remove characters not allowed on Windows");
+            });
+            ui.end_row();
+        }
+        RuleKind::Date(DateRule { source, format, position, separator }) => {
+            ui.label("Date from");
+            let label = |s: &Option<SourceKind>| match s {
+                None => "Same date as the folder (date source below)".to_string(),
+                Some(k) => format!("{} date", k.label()),
+            };
+            egui::ComboBox::from_id_salt(("date-src", idx)).width(w + 60.0).selected_text(label(source)).show_ui(
+                ui,
+                |ui| {
+                    ui.selectable_value(source, None, label(&None));
+                    for k in SourceKind::ALL {
+                        ui.selectable_value(source, Some(k), label(&Some(k)));
+                    }
+                },
+            );
+            ui.end_row();
+            ui.label("Format");
+            ui.horizontal(|ui| {
+                text_field(ui, format, "%Y-%m-%d", 140.0);
+                for (f, tip) in
+                    [("%Y-%m-%d", "2024-03-15"), ("%Y%m%d_%H%M%S", "20240315_142530"), ("%B %Y", "March 2024")]
+                {
+                    if ui.small_button(tip).on_hover_text(f).clicked() {
+                        *format = f.to_string();
+                    }
+                }
+            });
+            ui.end_row();
+            ui.label("");
+            let sample = chrono::NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(14, 25, 30).unwrap();
+            match rename::format_date(sample, format) {
+                Some(t) => ui.label(
+                    RichText::new(format!("e.g. “{t}”   (%Y year, %m month, %d day, %H %M %S time, %B month name)"))
+                        .weak()
+                        .small(),
+                ),
+                None => ui.label(RichText::new("Invalid format").color(red()).small()),
+            };
+            ui.end_row();
+            ui.label("Where");
+            ui.horizontal(|ui| position_editor(ui, ("date-pos", idx), position));
+            ui.end_row();
+            ui.label("Separator");
+            text_field(ui, separator, "e.g. space or _", 120.0);
+            ui.end_row();
+        }
+        RuleKind::ParentFolder(ParentRule { position, separator }) => {
+            ui.label("Where");
+            ui.horizontal(|ui| position_editor(ui, ("par-pos", idx), position));
+            ui.end_row();
+            ui.label("Separator");
+            text_field(ui, separator, "e.g.  - ", 120.0);
+            ui.end_row();
+            ui.label("");
+            ui.label(
+                RichText::new("Uses the file's folder; for files already in a Month YYYY folder, the folder above it.")
+                    .weak()
+                    .small(),
+            );
+            ui.end_row();
+        }
+        RuleKind::Delete(DeleteRule { from, until, right_to_left, keep_delimiters }) => {
+            ui.label("From");
+            ui.horizontal(|ui| {
+                let mut by_delim = matches!(from, DeleteFrom::Delimiter(_));
+                ui.radio_value(&mut by_delim, false, "position");
+                ui.radio_value(&mut by_delim, true, "delimiter");
+                match (by_delim, &*from) {
+                    (true, DeleteFrom::Position(_)) => *from = DeleteFrom::Delimiter(String::new()),
+                    (false, DeleteFrom::Delimiter(_)) => *from = DeleteFrom::Position(1),
+                    _ => {}
+                }
+                match from {
+                    DeleteFrom::Position(n) => {
+                        ui.add(egui::DragValue::new(n).range(1..=255));
+                    }
+                    DeleteFrom::Delimiter(t) => text_field(ui, t, "e.g. (", 90.0),
+                }
+            });
+            ui.end_row();
+            ui.label("Until");
+            ui.horizontal(|ui| {
+                let mut k = match until {
+                    DeleteUntil::Count(_) => 0,
+                    DeleteUntil::Delimiter(_) => 1,
+                    DeleteUntil::End => 2,
+                };
+                let old = k;
+                ui.radio_value(&mut k, 0, "count");
+                ui.radio_value(&mut k, 1, "delimiter");
+                ui.radio_value(&mut k, 2, "till the end");
+                if k != old {
+                    *until = match k {
+                        0 => DeleteUntil::Count(1),
+                        1 => DeleteUntil::Delimiter(String::new()),
+                        _ => DeleteUntil::End,
+                    };
+                }
+                match until {
+                    DeleteUntil::Count(n) => {
+                        ui.add(egui::DragValue::new(n).range(0..=255));
+                    }
+                    DeleteUntil::Delimiter(t) => text_field(ui, t, "e.g. )", 90.0),
+                    DeleteUntil::End => {}
+                }
+            });
+            ui.end_row();
+            ui.label("");
+            ui.horizontal(|ui| {
+                ui.checkbox(right_to_left, "Right-to-left");
+                ui.checkbox(keep_delimiters, "Do not remove delimiters");
+            });
+            ui.end_row();
+        }
+        RuleKind::Strip(StripRule { english, digits, symbols, brackets, user, except, case_sensitive }) => {
+            ui.label("Characters");
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(english, "English letters");
+                ui.checkbox(digits, "Digits");
+                ui.checkbox(symbols, "Symbols");
+                ui.checkbox(brackets, "Brackets");
+            });
+            ui.end_row();
+            ui.label("User defined");
+            text_field(ui, user, "e.g. #~", 140.0);
+            ui.end_row();
+            ui.label("");
+            ui.horizontal(|ui| {
+                ui.checkbox(except, "Strip all characters EXCEPT selected");
+                ui.checkbox(case_sensitive, "Case-sensitive");
+            });
+            ui.end_row();
+        }
+        RuleKind::Rearrange(RearrangeRule { split, by_positions, pattern }) => {
+            ui.label("Split using");
+            ui.horizontal(|ui| {
+                ui.radio_value(by_positions, false, "delimiters");
+                ui.radio_value(by_positions, true, "positions");
+                text_field(ui, split, if *by_positions { "e.g. 5|7" } else { "e.g.  - |_" }, 120.0);
+            });
+            ui.end_row();
+            ui.label("New pattern");
+            text_field(ui, pattern, "$2 - $1", w);
+            ui.end_row();
+            ui.label("");
+            ui.label(
+                RichText::new(
+                    "Separate several delimiters/positions with |.  $1 $2 … parts, $-1 last part, $0 whole name",
+                )
+                .weak()
+                .small(),
+            );
+            ui.end_row();
+        }
+        RuleKind::Padding(PaddingRule { zero_pad, remove_zero_padding, text_pad_len, pad_chars, pad_left }) => {
+            ui.label("Number sequences");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(zero_pad).range(0..=32).prefix("zero-pad to ")).on_hover_text("0 = off");
+                ui.checkbox(remove_zero_padding, "Remove zero padding");
+            });
+            ui.end_row();
+            ui.label("Text padding");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(text_pad_len).range(0..=255).prefix("to length ")).on_hover_text("0 = off");
+                text_field(ui, pad_chars, "chars", 50.0);
+                ui.radio_value(pad_left, true, "left");
+                ui.radio_value(pad_left, false, "right");
+            });
+            ui.end_row();
+        }
+        RuleKind::Randomize(RandomizeRule { length, digits, lower, upper, user, unique, position, .. }) => {
+            ui.label("Length");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(length).range(1..=64));
+                ui.checkbox(unique, "Unique if possible");
+            });
+            ui.end_row();
+            ui.label("Characters");
+            ui.horizontal(|ui| {
+                ui.checkbox(digits, "0-9");
+                ui.checkbox(lower, "a-z");
+                ui.checkbox(upper, "A-Z");
+                text_field(ui, user, "more", 60.0);
+            });
+            ui.end_row();
+            ui.label("Where");
+            ui.horizontal(|ui| position_editor(ui, ("rnd-pos", idx), position));
+            ui.end_row();
+        }
+        RuleKind::Translit => {
+            ui.label("");
+            ui.label(
+                RichText::new("Latin accents and special letters (é→e, ß→ss, Ø→O), Cyrillic and Greek → Latin").weak(),
+            );
+            ui.end_row();
+        }
+        RuleKind::ReformatDate(ReformatDateRule { find, to, whole_words }) => {
+            ui.label("Find dates like");
+            text_field(ui, find, "%d.%m.%Y|%Y%m%d", w);
+            ui.end_row();
+            ui.label("Convert to");
+            text_field(ui, to, "%Y-%m-%d", w);
+            ui.end_row();
+            ui.label("");
+            ui.horizontal(|ui| {
+                ui.checkbox(whole_words, "Match as whole words only");
+                ui.label(RichText::new("%Y %y %m %d %H %M %S %b %B; several formats separated by |").weak().small());
+            });
+            ui.end_row();
+        }
+        RuleKind::Extension(e) => {
+            ui.label("Extension");
+            ui.horizontal(|ui| {
+                let mut detect = matches!(e, ExtensionRule::Detect);
+                ui.radio_value(&mut detect, true, "Fix from file contents");
+                ui.radio_value(&mut detect, false, "Set to");
+                match (detect, &*e) {
+                    (true, ExtensionRule::Set(_)) => *e = ExtensionRule::Detect,
+                    (false, ExtensionRule::Detect) => *e = ExtensionRule::Set("jpg".into()),
+                    _ => {}
+                }
+                if let ExtensionRule::Set(x) = e {
+                    text_field(ui, x, "jpg", 60.0);
+                }
+            });
+            ui.end_row();
+            ui.label("");
+            ui.label(RichText::new("Only image/video extensions are allowed.").weak().small());
+            ui.end_row();
+        }
+        RuleKind::ExtensionCase(e) => {
+            ui.label("Extension");
+            ui.horizontal(|ui| {
+                ui.radio_value(e, ExtCase::Lower, "lower case (.jpg)");
+                ui.radio_value(e, ExtCase::Upper, "UPPER CASE (.JPG)");
+            });
+            ui.end_row();
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // eframe::App
 // ---------------------------------------------------------------------------
@@ -661,6 +1323,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.apply_style(&ctx);
         self.poll_worker();
+        self.drive_live_preview(&ctx);
         if self.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -677,7 +1340,7 @@ impl eframe::App for App {
         // drag & drop a folder (or a file inside it)
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if let Some(p) = dropped.first()
-            && !self.busy()
+            && !matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo))
         {
             self.set_folder(p);
         }
@@ -685,7 +1348,8 @@ impl eframe::App for App {
 
         self.top_bar(ui);
         self.status_bar(ui);
-        self.side_panel(ui, &ctx);
+        self.action_bar(ui, &ctx);
+        self.setup_panel(ui);
         egui::CentralPanel::default_margins().show(ui, |ui| self.central(ui));
 
         if hovering {
@@ -712,13 +1376,61 @@ impl eframe::App for App {
     }
 }
 
+/// Collapsible numbered section frame.
+fn step_section(
+    ui: &mut egui::Ui,
+    num: &str,
+    title: &str,
+    summary: &str,
+    open: &mut bool,
+    add: impl FnOnce(&mut egui::Ui),
+) {
+    let fill = ui.visuals().faint_bg_color;
+    let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(CornerRadius::same(10))
+        .inner_margin(Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let r = ui
+                .horizontal(|ui| {
+                    let arrow = if *open { "⏷" } else { "⏵" };
+                    let t = ui.add(
+                        egui::Button::new(RichText::new(format!("{arrow} {num}")).strong().color(accent(ui)))
+                            .frame(false),
+                    );
+                    let h = ui.add(
+                        egui::Button::new(
+                            RichText::new(title).strong().size(ui.style().text_styles[&TextStyle::Body].size * 1.12),
+                        )
+                        .frame(false),
+                    );
+                    ui.add(egui::Label::new(RichText::new(summary).weak()).truncate());
+                    t.clicked() || h.clicked()
+                })
+                .inner;
+            if r {
+                *open = !*open;
+            }
+            if *open {
+                ui.add_space(4.0);
+                add(ui);
+            }
+        });
+}
+
 impl App {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("top").show(ui, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("📷 PhotoSorter").heading().strong());
-                ui.label(RichText::new("sort images into “Month YYYY” folders").weak());
+                ui.label(
+                    RichText::new("rename & sort photos and videos — ReNamer-style rules, then “Month YYYY” folders")
+                        .weak(),
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let (icon, tip, next) = match self.s.theme {
                         Theme::Dark => ("☀ Light", "Switch to light theme", Theme::Light),
@@ -765,31 +1477,134 @@ impl App {
         });
     }
 
-    fn side_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        egui::Panel::left("side").resizable(true).default_size(self.s.font_size * 24.0).show(ui, |ui| {
-            // Actions stay pinned at the bottom so they are always visible.
-            egui::Panel::bottom("actions")
-                .frame(egui::Frame::NONE.inner_margin(Margin { left: 0, right: 0, top: 8, bottom: 8 }))
-                .show_separator_line(false)
-                .show(ui, |ui| self.actions_section(ui, ctx));
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    /// Step 5: Apply + Undo, always visible at the bottom.
+    fn action_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        egui::Panel::bottom("actions").show(ui, |ui| {
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("5").strong().color(accent(ui)));
+                let h = self.s.font_size + 16.0;
+                let kind = self.busy_kind();
+                if matches!(kind, Some(JobKind::Apply | JobKind::Undo)) {
+                    let can_cancel = kind == Some(JobKind::Apply);
+                    let label = if can_cancel { "⏹ Cancel" } else { "Undo running…" };
+                    if ui.add_enabled(can_cancel, egui::Button::new(label).min_size(Vec2::new(160.0, h))).clicked()
+                        && let Some(w) = &self.worker
+                    {
+                        w.cancel.store(true, Ordering::Relaxed);
+                    }
+                    return;
+                }
+                let current = self.plan_is_current() && kind.is_none();
+                let n = if current { self.counts.to_move } else { 0 };
+                let text = if n > 0 {
+                    format!(
+                        "✔ Apply — {} files ({} renamed, {} moved)",
+                        n,
+                        self.counts.renamed,
+                        n - self.counts.rename_only
+                    )
+                } else {
+                    "✔ Apply".to_string()
+                };
+                let btn = if current && n > 0 {
+                    egui::Button::new(RichText::new(text).strong().color(Color32::WHITE))
+                        .fill(green().gamma_multiply(0.9))
+                        .min_size(Vec2::new(280.0, h))
+                } else {
+                    egui::Button::new(RichText::new(text)).min_size(Vec2::new(280.0, h))
+                };
+                let r = ui.add_enabled(current && n > 0, btn);
+                let r = if !self.rule_errors.is_empty() {
+                    r.on_disabled_hover_text("Fix the rule errors first")
+                } else if kind == Some(JobKind::Preview) {
+                    r.on_disabled_hover_text("Preview is still updating…")
+                } else {
+                    r.on_disabled_hover_text("Nothing to do (or the preview is not up to date)")
+                };
+                if r.clicked() {
+                    self.confirm = Some(Confirm::Apply);
+                }
+
+                let log = self.undo_log_for_root();
+                let undo_btn = egui::Button::new("↩ Undo last run").min_size(Vec2::new(170.0, h));
+                let r = ui.add_enabled(log.is_some(), undo_btn);
+                let r = match &log {
+                    Some(p) => r.on_hover_text(format!("Restores original names and folders using {}", p.display())),
+                    None => r.on_disabled_hover_text("No undo log (PhotoSorter-undo-*.json) in this folder"),
+                };
+                if r.clicked()
+                    && let Some(p) = log
+                {
+                    match ops::read_log(&p) {
+                        Ok(l) => {
+                            self.confirm = Some(Confirm::Undo { moves: l.moves.len(), started: l.started, log: p })
+                        }
+                        Err(e) => self.status = format!("Cannot read undo log: {e}"),
+                    }
+                }
+                if kind == Some(JobKind::Preview) {
+                    if ui.button("⏹ Stop preview").clicked()
+                        && let Some(w) = &self.worker
+                    {
+                        w.cancel.store(true, Ordering::Relaxed);
+                    }
+                } else if ui
+                    .button("↻ Refresh preview")
+                    .on_hover_text("Re-scan the folder (e.g. after files changed on disk)")
+                    .clicked()
+                {
+                    self.refresh();
+                    let _ = ctx;
+                }
                 ui.add_space(8.0);
-                let busy = self.busy();
-                ui.add_enabled_ui(!busy, |ui| {
+                let hint = if !self.rule_errors.is_empty() {
+                    RichText::new("⚠ A rule has an error — see the rules list").color(red())
+                } else if self.plan.is_some() && !self.plan_is_current() && kind.is_none() {
+                    RichText::new("Preview is out of date").color(amber())
+                } else {
+                    RichText::new(
+                        "Nothing changes on disk until you click Apply and confirm. Undo log is written first.",
+                    )
+                    .weak()
+                    .small()
+                };
+                ui.add(egui::Label::new(hint).truncate());
+            });
+            ui.add_space(6.0);
+        });
+    }
+
+    /// Steps 1–3 in a resizable, scrollable top area.
+    fn setup_panel(&mut self, ui: &mut egui::Ui) {
+        let fs = self.s.font_size;
+        egui::Panel::top("setup").resizable(true).default_size(fs * 24.0).min_size(fs * 4.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                ui.add_space(6.0);
+                let locked = matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo));
+                ui.add_enabled_ui(!locked, |ui| {
                     self.source_section(ui);
-                    ui.add_space(8.0);
-                    self.options_section(ui);
+                    ui.add_space(6.0);
+                    self.rules_section(ui);
+                    ui.add_space(6.0);
+                    self.output_section(ui);
                 });
-                ui.add_space(4.0);
+                ui.add_space(6.0);
             });
         });
     }
 
     fn source_section(&mut self, ui: &mut egui::Ui) {
-        section(ui, "1", "Source folder", |ui| {
+        let summary = if self.s.folder_trimmed().is_empty() {
+            "no folder chosen".to_string()
+        } else {
+            format!("{}{}", self.s.folder_trimmed(), if self.s.include_subfolders { "  (+ subfolders)" } else { "" })
+        };
+        let mut open = self.open_source;
+        step_section(ui, "1", "Source & filter", &summary, &mut open, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("📂 Browse…").clicked() {
-                    let mut dlg = rfd::FileDialog::new().set_title("Choose a folder with images");
+                    let mut dlg = rfd::FileDialog::new().set_title("Choose a folder with photos / videos");
                     let cur = self.root();
                     if cur.is_dir() {
                         dlg = dlg.set_directory(&cur);
@@ -807,181 +1622,332 @@ impl App {
             if !self.s.folder_trimmed().is_empty() && !self.root().is_dir() {
                 ui.label(RichText::new("Folder does not exist").color(red()).small());
             }
-            ui.checkbox(&mut self.s.include_subfolders, "Include subfolders")
-                .on_hover_text("Every folder containing images gets its own Month YYYY subfolders.");
             ui.horizontal(|ui| {
+                ui.checkbox(&mut self.s.include_subfolders, "Include subfolders")
+                    .on_hover_text("Every folder containing photos/videos gets its own Month YYYY subfolders.");
                 ui.label("Extensions");
                 ui.add(egui::TextEdit::singleline(&mut self.s.extensions).desired_width(f32::INFINITY))
-                    .on_hover_text("Comma-separated, case-insensitive");
+                    .on_hover_text("Comma-separated, case-insensitive. Only image, RAW and video types are accepted.");
             });
+            let rejected = scan::rejected_extensions(&self.s.extensions);
+            if !rejected.is_empty() {
+                ui.label(
+                    RichText::new(format!("Ignored (not image/video, never touched): {}", rejected.join(", ")))
+                        .color(amber())
+                        .small(),
+                );
+            }
         });
+        self.open_source = open;
     }
 
-    fn options_section(&mut self, ui: &mut egui::Ui) {
-        section(ui, "2", "Options", |ui| {
-            egui::Grid::new("opts").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-                ui.label("Date source");
-                egui::ComboBox::from_id_salt("mode").width(220.0).selected_text(self.s.date.mode.label()).show_ui(
-                    ui,
-                    |ui| {
-                        for m in [
-                            DateMode::Auto,
-                            DateMode::Only(SourceKind::Filename),
-                            DateMode::Only(SourceKind::Exif),
-                            DateMode::Only(SourceKind::Modified),
-                            DateMode::Only(SourceKind::Created),
-                        ] {
-                            ui.selectable_value(&mut self.s.date.mode, m, m.label());
+    fn rules_section(&mut self, ui: &mut egui::Ui) {
+        let enabled = self.s.rules.iter().filter(|r| r.enabled).count();
+        let summary = if self.s.rules.is_empty() {
+            "no rules — file names are kept".to_string()
+        } else {
+            format!("{} rules ({} enabled), applied top to bottom", self.s.rules.len(), enabled)
+        };
+        let mut open = self.open_rules;
+        step_section(ui, "2", "Rename rules", &summary, &mut open, |ui| {
+            self.presets_row(ui);
+            ui.add_space(4.0);
+            let n = self.s.rules.len();
+            let mut action: Option<(usize, RuleAction)> = None;
+            for i in 0..n {
+                let err = self.rule_errors.iter().find(|(k, _)| *k == i).map(|(_, e)| e.clone());
+                let is_open = self.open_rule == Some(i);
+                let stroke = if err.is_some() {
+                    Stroke::new(1.5, red())
+                } else if is_open {
+                    Stroke::new(1.0, accent(ui))
+                } else {
+                    ui.visuals().widgets.noninteractive.bg_stroke
+                };
+                egui::Frame::new()
+                    .stroke(stroke)
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(Margin::symmetric(8, 4))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            let rule = &mut self.s.rules[i];
+                            ui.checkbox(&mut rule.enabled, "").on_hover_text("Enable / disable this rule");
+                            ui.label(RichText::new(format!("{}.", i + 1)).weak());
+                            let title = RichText::new(rule.kind.type_label()).strong();
+                            let title = if rule.enabled { title } else { title.weak() };
+                            if ui.add(egui::Button::new(title).frame(false)).on_hover_text("Edit").clicked() {
+                                action = Some((i, RuleAction::ToggleOpen));
+                            }
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if ui.small_button("🗑").on_hover_text("Delete rule").clicked() {
+                                    action = Some((i, RuleAction::Delete));
+                                }
+                                if ui.small_button("📋").on_hover_text("Duplicate rule").clicked() {
+                                    action = Some((i, RuleAction::Duplicate));
+                                }
+                                if ui
+                                    .add_enabled(i + 1 < n, egui::Button::new("⏷").small())
+                                    .on_hover_text("Move down")
+                                    .clicked()
+                                {
+                                    action = Some((i, RuleAction::Down));
+                                }
+                                if ui
+                                    .add_enabled(i > 0, egui::Button::new("⏶").small())
+                                    .on_hover_text("Move up")
+                                    .clicked()
+                                {
+                                    action = Some((i, RuleAction::Up));
+                                }
+                                if ui.small_button(if is_open { "Done" } else { "✏ Edit" }).clicked() {
+                                    action = Some((i, RuleAction::ToggleOpen));
+                                }
+                                let rule = &self.s.rules[i];
+                                let summ = RichText::new(rule.kind.summary());
+                                let summ = if rule.enabled { summ } else { summ.weak().strikethrough() };
+                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                    ui.add(egui::Label::new(summ).truncate());
+                                });
+                            });
+                        });
+                        if let Some(e) = &err {
+                            ui.label(RichText::new(format!("⚠ {e}")).color(red()).small());
                         }
-                    },
-                );
-                ui.end_row();
-
-                ui.label("If no date found");
-                egui::ComboBox::from_id_salt("fallback")
-                    .width(220.0)
-                    .selected_text(self.s.date.fallback.label())
-                    .show_ui(ui, |ui| {
-                        for f in [Fallback::Modified, Fallback::Created, Fallback::Skip] {
-                            ui.selectable_value(&mut self.s.date.fallback, f, f.label());
+                        if is_open {
+                            ui.separator();
+                            rule_editor(ui, i, &mut self.s.rules[i].kind);
                         }
                     });
-                ui.end_row();
-
-                ui.label("Ambiguous dates")
-                    .on_hover_text("For names like 03-04-2024 where both numbers could be the month.");
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.s.date.order, DateOrder::Us, "US (MM-DD)");
-                    ui.radio_value(&mut self.s.date.order, DateOrder::Intl, "Intl (DD-MM)");
-                });
-                ui.end_row();
-
-                ui.label("Folder name");
-                ui.add(egui::TextEdit::singleline(&mut self.s.folder_template).desired_width(220.0))
-                    .on_hover_text("Tokens: {MMMM} {MMM} {MM} {M} {YYYY} {YY} {DD}");
-                ui.end_row();
-
-                ui.label("");
-                let example = format_folder_name(&self.s.folder_template, chrono::Local::now().date_naive());
-                ui.label(RichText::new(format!("e.g. “{example}”")).weak().small());
-                ui.end_row();
-            });
-
-            if self.s.date.mode == DateMode::Auto {
-                ui.add_space(4.0);
-                ui.label(RichText::new("Auto priority (first match wins)").strong());
-                let mut changed = false;
-                let mut swap: Option<(usize, usize)> = None;
-                let n = self.order_ui.len();
-                let enabled_count = self.order_ui.iter().filter(|(_, on)| *on).count();
-                for i in 0..n {
-                    let (kind, on) = self.order_ui[i];
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{}.", i + 1)).weak());
-                        let mut on2 = on;
-                        let can_toggle = !(on && enabled_count == 1);
-                        let cb = ui.add_enabled(can_toggle, egui::Checkbox::new(&mut on2, kind_desc(kind)));
-                        let cb = if kind == SourceKind::Filename {
-                            cb.on_hover_text("e.g. IMG_20240315_142530, 2024-03-15, Screenshot_20240315-…, IMG-20240315-WA0001, 1710512345")
-                        } else {
-                            cb
-                        };
-                        if cb.changed() {
-                            self.order_ui[i].1 = on2;
-                            changed = true;
-                        }
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add_enabled(i + 1 < n, egui::Button::new("⏷").small()).clicked() {
-                                swap = Some((i, i + 1));
-                            }
-                            if ui.add_enabled(i > 0, egui::Button::new("⏶").small()).clicked() {
-                                swap = Some((i, i - 1));
+                ui.add_space(2.0);
+            }
+            if let Some((i, a)) = action {
+                match a {
+                    RuleAction::Up if i > 0 => {
+                        self.s.rules.swap(i, i - 1);
+                        self.open_rule = self.open_rule.map(|o| {
+                            if o == i {
+                                i - 1
+                            } else if o == i - 1 {
+                                i
+                            } else {
+                                o
                             }
                         });
-                    });
-                }
-                if let Some((a, b)) = swap {
-                    self.order_ui.swap(a, b);
-                    changed = true;
-                }
-                if changed {
-                    self.sync_order();
+                    }
+                    RuleAction::Down if i + 1 < self.s.rules.len() => {
+                        self.s.rules.swap(i, i + 1);
+                        self.open_rule = self.open_rule.map(|o| {
+                            if o == i {
+                                i + 1
+                            } else if o == i + 1 {
+                                i
+                            } else {
+                                o
+                            }
+                        });
+                    }
+                    RuleAction::Duplicate => {
+                        let mut copy = self.s.rules[i].clone();
+                        if let RuleKind::Randomize(r) = &mut copy.kind {
+                            r.seed = rename::new_seed();
+                        }
+                        self.s.rules.insert(i + 1, copy);
+                        self.open_rule = Some(i + 1);
+                    }
+                    RuleAction::Delete => {
+                        self.s.rules.remove(i);
+                        self.open_rule = match self.open_rule {
+                            Some(o) if o == i => None,
+                            Some(o) if o > i => Some(o - 1),
+                            o => o,
+                        };
+                    }
+                    RuleAction::ToggleOpen => {
+                        self.open_rule = if self.open_rule == Some(i) { None } else { Some(i) };
+                    }
+                    _ => {}
                 }
             }
-        });
-    }
-
-    fn actions_section(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        section(ui, "3", "Actions", |ui| {
-            let busy = self.busy();
-            let full = Vec2::new(ui.available_width(), self.s.font_size + 16.0);
-            if busy {
-                let label = match self.worker.as_ref().map(|w| w.kind) {
-                    Some(JobKind::Undo) => "Undo running…",
-                    _ => "⏹ Cancel",
-                };
-                let can_cancel = self.worker.as_ref().map(|w| w.kind != JobKind::Undo).unwrap_or(false);
-                if ui.add_enabled(can_cancel, egui::Button::new(label).min_size(full)).clicked()
-                    && let Some(w) = &self.worker
-                {
-                    w.cancel.store(true, Ordering::Relaxed);
+            ui.horizontal(|ui| {
+                ui.menu_button(RichText::new("➕ Add rule").strong(), |ui| {
+                    for key in RULE_TYPES {
+                        if ui.button(RuleKind::type_label_for(key)).clicked() {
+                            if let Some(k) = RuleKind::new_default(key) {
+                                self.s.rules.push(RuleSpec::new(k));
+                                self.open_rule = Some(self.s.rules.len() - 1);
+                            }
+                            ui.close();
+                        }
+                    }
+                });
+                if !self.s.rules.is_empty() && ui.button("Clear all").on_hover_text("Remove every rule").clicked() {
+                    self.s.rules.clear();
+                    self.open_rule = None;
                 }
-                return;
-            }
-
-            if ui
-                .add(egui::Button::new(RichText::new("🔍 Preview (dry run)").strong()).min_size(full))
-                .on_hover_text("Scan and show what would happen. Nothing is changed.")
-                .clicked()
-            {
-                self.start_preview(ctx);
-            }
-
-            let to_move = if self.plan.is_some() { self.counts.to_move } else { 0 };
-            let stale = self.plan_is_stale();
-            let can_apply = self.plan.is_some() && !stale && to_move > 0;
-            let apply_text =
-                if to_move > 0 { format!("✔ Apply — move {to_move} files") } else { "✔ Apply".to_string() };
-            let btn = if can_apply {
-                egui::Button::new(RichText::new(apply_text).strong().color(Color32::WHITE))
-                    .fill(green().gamma_multiply(0.9))
-                    .min_size(full)
-            } else {
-                egui::Button::new(RichText::new(apply_text)).min_size(full)
-            };
-            if ui.add_enabled(can_apply, btn).clicked() {
-                self.confirm = Some(Confirm::Apply);
-            }
-            if stale {
                 ui.label(
-                    RichText::new("Options changed since the preview — run Preview again.").color(amber()).small(),
+                    RichText::new(
+                        "Rules change the name without its extension, top to bottom. The preview below updates live.",
+                    )
+                    .weak()
+                    .small(),
                 );
-            } else if self.plan.is_none() {
-                ui.label(RichText::new("Run a preview first; Apply is enabled afterwards.").weak().small());
-            }
+            });
+        });
+        self.open_rules = open;
+    }
 
-            ui.add_space(4.0);
-            let log = self.undo_log_for_root();
-            let undo_btn = egui::Button::new("↩ Undo last run").min_size(full);
-            let r = ui.add_enabled(log.is_some(), undo_btn);
-            let r = match &log {
-                Some(p) => r.on_hover_text(format!("Uses {}", p.display())),
-                None => r.on_disabled_hover_text("No undo log (PhotoSorter-undo-*.json) in this folder"),
-            };
-            if r.clicked()
-                && let Some(p) = log
-            {
-                match ops::read_log(&p) {
-                    Ok(l) => self.confirm = Some(Confirm::Undo { moves: l.moves.len(), started: l.started, log: p }),
-                    Err(e) => self.status = format!("Cannot read undo log: {e}"),
+    fn presets_row(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Preset");
+            let sel_text = if self.preset_sel.is_empty() { "(choose)".to_string() } else { self.preset_sel.clone() };
+            egui::ComboBox::from_id_salt("preset").width(180.0).selected_text(sel_text).show_ui(ui, |ui| {
+                for p in &self.s.presets {
+                    ui.selectable_value(&mut self.preset_sel, p.name.clone(), &p.name);
                 }
+                if self.s.presets.is_empty() {
+                    ui.label(RichText::new("No presets saved yet").weak());
+                }
+            });
+            let exists = self.s.presets.iter().any(|p| p.name == self.preset_sel);
+            if ui.add_enabled(exists, egui::Button::new("Load")).on_hover_text("Load rules + options").clicked()
+                && let Some(p) = self.s.presets.iter().find(|p| p.name == self.preset_sel).cloned()
+            {
+                self.s.apply_preset(&p);
+                self.rebuild_order_ui();
+                self.open_rule = None;
+                self.status = format!("Loaded preset “{}”.", p.name);
+            }
+            if ui.add_enabled(exists, egui::Button::new("Delete")).clicked() {
+                let name = self.preset_sel.clone();
+                self.s.delete_preset(&name);
+                self.preset_sel.clear();
+                self.save_settings();
+                self.status = format!("Deleted preset “{name}”.");
+            }
+            ui.separator();
+            ui.add(egui::TextEdit::singleline(&mut self.preset_name).hint_text("new preset name").desired_width(150.0));
+            let name = settings::clean_preset_name(&self.preset_name);
+            if ui
+                .add_enabled(!name.is_empty(), egui::Button::new("💾 Save as preset"))
+                .on_hover_text("Saves the rules and the options of steps 1 and 3 into PhotoSorter.ini")
+                .clicked()
+                && self.s.save_preset(&name)
+            {
+                self.preset_sel = name.clone();
+                self.preset_name.clear();
+                self.save_settings();
+                self.status = format!("Saved preset “{name}”.");
             }
         });
     }
+
+    fn output_section(&mut self, ui: &mut egui::Ui) {
+        let summary = if self.s.sort_into_folders {
+            format!("into “{}” folders, date: {}", self.s.folder_template, self.s.date.mode.label())
+        } else {
+            "off — files stay in their folders (rename only)".to_string()
+        };
+        let mut open = self.open_output;
+        step_section(ui, "3", "Output folder", &summary, &mut open, |ui| {
+            ui.checkbox(&mut self.s.sort_into_folders, RichText::new("Sort into “Month YYYY” folders").strong())
+                .on_hover_text("Off: only rename files where they are; no folders are created.");
+            ui.add_enabled_ui(self.s.sort_into_folders, |ui| {
+                egui::Grid::new("opts").num_columns(4).spacing([10.0, 8.0]).show(ui, |ui| {
+                    ui.label("Date source");
+                    egui::ComboBox::from_id_salt("mode").width(220.0).selected_text(self.s.date.mode.label()).show_ui(
+                        ui,
+                        |ui| {
+                            for m in [
+                                DateMode::Auto,
+                                DateMode::Only(SourceKind::Filename),
+                                DateMode::Only(SourceKind::Exif),
+                                DateMode::Only(SourceKind::Modified),
+                                DateMode::Only(SourceKind::Created),
+                            ] {
+                                ui.selectable_value(&mut self.s.date.mode, m, m.label());
+                            }
+                        },
+                    );
+                    ui.label("If no date found");
+                    egui::ComboBox::from_id_salt("fallback")
+                        .width(180.0)
+                        .selected_text(self.s.date.fallback.label())
+                        .show_ui(ui, |ui| {
+                            for f in [Fallback::Modified, Fallback::Created, Fallback::Skip] {
+                                ui.selectable_value(&mut self.s.date.fallback, f, f.label());
+                            }
+                        });
+                    ui.end_row();
+
+                    ui.label("Folder name");
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(&mut self.s.folder_template).desired_width(140.0))
+                            .on_hover_text("Tokens: {MMMM} {MMM} {MM} {M} {YYYY} {YY} {DD}");
+                        let example = format_folder_name(&self.s.folder_template, chrono::Local::now().date_naive());
+                        ui.label(RichText::new(format!("e.g. “{example}”")).weak().small());
+                    });
+                    ui.label("Ambiguous dates")
+                        .on_hover_text("For names like 03-04-2024 where both numbers could be the month.");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.s.date.order, DateOrder::Us, "US (MM-DD)");
+                        ui.radio_value(&mut self.s.date.order, DateOrder::Intl, "Intl (DD-MM)");
+                    });
+                    ui.end_row();
+                });
+            });
+            if self.s.date.mode == DateMode::Auto {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new("Auto priority (first match wins; also used by “Insert date”):").weak());
+                    let mut changed = false;
+                    let mut swap: Option<(usize, usize)> = None;
+                    let n = self.order_ui.len();
+                    let enabled_count = self.order_ui.iter().filter(|(_, on)| *on).count();
+                    for i in 0..n {
+                        let (kind, on) = self.order_ui[i];
+                        egui::Frame::new()
+                            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                            .corner_radius(CornerRadius::same(6))
+                            .inner_margin(Margin::symmetric(4, 0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.add_enabled(i > 0, egui::Button::new("⏴").small()).clicked() {
+                                        swap = Some((i, i - 1));
+                                    }
+                                    let mut on2 = on;
+                                    let can_toggle = !(on && enabled_count == 1);
+                                    if ui
+                                        .add_enabled(can_toggle, egui::Checkbox::new(&mut on2, kind_desc(kind)))
+                                        .changed()
+                                    {
+                                        self.order_ui[i].1 = on2;
+                                        changed = true;
+                                    }
+                                    if ui.add_enabled(i + 1 < n, egui::Button::new("⏵").small()).clicked() {
+                                        swap = Some((i, i + 1));
+                                    }
+                                });
+                            });
+                    }
+                    if let Some((a, b)) = swap {
+                        self.order_ui.swap(a, b);
+                        changed = true;
+                    }
+                    if changed {
+                        self.sync_order();
+                    }
+                });
+            }
+        });
+        self.open_output = open;
+    }
+
+    // ----- step 4: live preview -----
 
     fn central(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading("Preview");
+            ui.label(RichText::new("4").strong().color(accent(ui)));
+            ui.heading("Live preview");
             ui.add_space(16.0);
             ui.selectable_value(&mut self.tab, Tab::Files, "Files");
             ui.selectable_value(&mut self.tab, Tab::Folders, "By destination");
@@ -990,22 +1956,27 @@ impl App {
                 + self.scan_errors.len();
             let res_label = if n_err > 0 { format!("Results / errors ({n_err})") } else { "Results / errors".into() };
             ui.selectable_value(&mut self.tab, Tab::Results, res_label);
+            if self.busy_kind() == Some(JobKind::Preview) {
+                ui.add(egui::Spinner::new());
+            }
         });
-        ui.separator();
 
         if self.plan.is_some() {
             let c = self.counts;
             ui.horizontal_wrapped(|ui| {
-                chip(ui, "Images", c.total, accent(ui));
-                chip(ui, "To move", c.to_move, green());
-                chip(ui, "Renamed", c.collisions, amber());
-                chip(ui, "Already sorted", c.already_sorted, grey());
+                chip(ui, "Files", c.total, accent(ui));
+                chip(ui, "Renamed", c.renamed, green());
+                chip(ui, "Moved", c.to_move - c.rename_only, green());
+                chip(ui, "Name clash → suffix", c.collisions, amber());
+                chip(ui, "Notes", c.warnings, amber());
+                chip(ui, "Unchanged / sorted", c.already_sorted + c.unchanged, grey());
                 chip(ui, "No date", c.no_date, amber());
                 chip(ui, "Errors", c.errors, red());
                 chip(ui, "New folders", c.new_folders, accent(ui));
             });
-            ui.label(RichText::new(format!("Date sources — {}", self.source_summary)).weak());
-            ui.add_space(4.0);
+            if self.s.sort_into_folders {
+                ui.label(RichText::new(format!("Date sources — {}", self.source_summary)).weak().small());
+            }
         }
 
         match self.tab {
@@ -1017,10 +1988,9 @@ impl App {
 
     fn files_tab(&mut self, ui: &mut egui::Ui) {
         if self.plan.is_none() {
-            empty_state(ui, self.run_report.is_some() || self.undo_report.is_some());
+            empty_state(ui, self.run_report.is_some() || self.undo_report.is_some(), !self.rule_errors.is_empty());
             return;
         }
-        // filters
         ui.horizontal(|ui| {
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.filter_text)
@@ -1030,26 +2000,18 @@ impl App {
             if r.changed() {
                 self.view_dirty = true;
             }
-            let before = (self.filter_status, self.filter_source);
+            let before = self.filter_status;
             egui::ComboBox::from_id_salt("fstatus").selected_text(self.filter_status.label()).show_ui(ui, |ui| {
                 for f in StatusFilter::ALL {
                     ui.selectable_value(&mut self.filter_status, f, f.label());
                 }
             });
-            let src_label = self.filter_source.map(|k| k.label()).unwrap_or("All sources");
-            egui::ComboBox::from_id_salt("fsource").selected_text(src_label).show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.filter_source, None, "All sources");
-                for k in SourceKind::ALL {
-                    ui.selectable_value(&mut self.filter_source, Some(k), k.label());
-                }
-            });
-            if before != (self.filter_status, self.filter_source) {
+            if before != self.filter_status {
                 self.view_dirty = true;
             }
             if ui.button("Clear").clicked() {
                 self.filter_text.clear();
                 self.filter_status = StatusFilter::All;
-                self.filter_source = None;
                 self.view_dirty = true;
             }
         });
@@ -1057,7 +2019,13 @@ impl App {
             self.rebuild_view();
         }
         let total = self.plan.as_ref().map(|p| p.items.len()).unwrap_or(0);
-        ui.label(RichText::new(format!("Showing {} of {} files", self.view.len(), total)).weak().small());
+        let stale = !self.plan_is_current();
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(format!("Showing {} of {} files", self.view.len(), total)).weak().small());
+            if stale {
+                ui.label(RichText::new("(updating…)").color(amber()).small());
+            }
+        });
 
         let plan = self.plan.as_ref().unwrap();
         let root = plan.root.clone();
@@ -1071,34 +2039,39 @@ impl App {
             }
         };
         let view = &self.view;
+        let fs = self.s.font_size;
         TableBuilder::new(ui)
             .id_salt("files")
             .striped(true)
             .resizable(true)
             .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::exact(40.0))
-            .column(Column::remainder().at_least(90.0).clip(true))
-            .column(Column::remainder().at_least(70.0).clip(true))
-            .column(Column::remainder().at_least(90.0).clip(true))
-            .column(Column::initial(self.s.font_size * 8.5).at_least(70.0).clip(true))
-            .column(Column::initial(self.s.font_size * 5.2).at_least(50.0).clip(true))
-            .column(Column::initial(self.s.font_size * 7.5).at_least(60.0).clip(true))
+            .column(Column::exact(44.0))
+            .column(Column::initial(fs * 13.0).at_least(80.0).clip(true))
+            .column(Column::initial(fs * 13.0).at_least(80.0).clip(true))
+            .column(Column::initial(fs * 9.0).at_least(60.0).clip(true))
+            .column(Column::initial(fs * 11.0).at_least(70.0).clip(true))
+            .column(Column::initial(fs * 8.0).at_least(60.0).clip(true))
+            .column(Column::initial(fs * 8.0).at_least(60.0).clip(true))
+            .column(Column::remainder().at_least(60.0).clip(true))
             .header(row_h + 4.0, |mut h| {
                 h.col(|ui| {
                     ui.label(RichText::new("#").strong());
                 });
-                h.col(|ui| header(ui, SortCol::File, "File", &mut clicked));
+                h.col(|ui| header(ui, SortCol::File, "Before (current name)", &mut clicked));
+                h.col(|ui| header(ui, SortCol::NewName, "After (new name)", &mut clicked));
                 h.col(|ui| header(ui, SortCol::Current, "Current folder", &mut clicked));
-                h.col(|ui| header(ui, SortCol::Dest, "Destination", &mut clicked));
+                h.col(|ui| header(ui, SortCol::Dest, "Destination folder", &mut clicked));
                 h.col(|ui| header(ui, SortCol::Date, "Date used", &mut clicked));
-                h.col(|ui| header(ui, SortCol::Source, "Source", &mut clicked));
-                h.col(|ui| header(ui, SortCol::Status, "Status", &mut clicked));
+                h.col(|ui| header(ui, SortCol::Status, "Action", &mut clicked));
+                h.col(|ui| {
+                    ui.label(RichText::new("Notes").strong());
+                });
             })
             .body(|body| {
                 body.rows(row_h, view.len(), |mut row| {
                     let idx = row.index();
                     let it = &plan.items[view[idx]];
-                    let name = it.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let name = it.original_name();
                     row.col(|ui| {
                         ui.label(RichText::new((idx + 1).to_string()).weak().small());
                     });
@@ -1106,22 +2079,39 @@ impl App {
                         ui.add(egui::Label::new(&name).truncate()).on_hover_text(it.source.display().to_string());
                     });
                     row.col(|ui| {
+                        if it.status == Status::Move {
+                            let new = it.final_name();
+                            let rt = if it.renamed_for_collision {
+                                RichText::new(&new).color(amber())
+                            } else if new != name {
+                                RichText::new(&new).color(green()).strong()
+                            } else {
+                                RichText::new(&new).weak()
+                            };
+                            let r = ui.add(egui::Label::new(rt).truncate());
+                            if it.renamed_for_collision {
+                                r.on_hover_text("A file with this name already exists or is planned; a suffix was added so nothing is overwritten.");
+                            } else {
+                                r.on_hover_text(it.dest_path.display().to_string());
+                            }
+                        } else {
+                            ui.label(RichText::new("—").weak());
+                        }
+                    });
+                    row.col(|ui| {
                         ui.add(egui::Label::new(rel(&root, &it.current_dir)).truncate())
                             .on_hover_text(it.current_dir.display().to_string());
                     });
                     row.col(|ui| {
                         let txt = match it.status {
-                            Status::Move => rel(&root, &it.dest_path),
-                            Status::AlreadySorted => "— (stays)".into(),
+                            Status::Move if it.is_rename_only() => "(same folder)".to_string(),
+                            Status::Move => rel(&root, &it.dest_dir),
+                            Status::AlreadySorted | Status::Unchanged => "— (stays)".into(),
                             _ => "—".into(),
                         };
-                        let mut rt = RichText::new(txt);
-                        if it.renamed_for_collision {
-                            rt = rt.color(amber());
-                        }
-                        let r = ui.add(egui::Label::new(rt).truncate());
+                        let r = ui.add(egui::Label::new(txt).truncate());
                         if it.status == Status::Move {
-                            r.on_hover_text(it.dest_path.display().to_string());
+                            r.on_hover_text(it.dest_dir.display().to_string());
                         }
                     });
                     row.col(|ui| {
@@ -1132,30 +2122,28 @@ impl App {
                             },
                             None => "—".into(),
                         };
-                        ui.label(txt);
+                        let r = ui.label(txt);
+                        if let Some(d) = it.date {
+                            r.on_hover_text(format!(
+                                "Source: {}{}",
+                                d.source.label(),
+                                if d.via_fallback { " (fallback)" } else { "" }
+                            ));
+                        }
                     });
                     row.col(|ui| {
-                        match it.date {
-                            Some(d) => {
-                                let r = ui.label(d.source.label());
-                                if d.via_fallback {
-                                    r.on_hover_text("Used the fallback rule");
-                                }
-                            }
-                            None => {
-                                ui.label("—");
-                            }
-                        };
-                    });
-                    row.col(|ui| {
-                        let label = match &it.status {
-                            Status::Move if it.renamed_for_collision => "Move (renamed)".to_string(),
-                            s => s.label().to_string(),
-                        };
-                        let r =
-                            ui.label(RichText::new(label).color(status_color(&it.status, it.renamed_for_collision)));
+                        let r = ui.label(
+                            RichText::new(status_text(it)).color(status_color(&it.status, it.renamed_for_collision)),
+                        );
                         if let Status::Error(e) = &it.status {
                             r.on_hover_text(e);
+                        }
+                    });
+                    row.col(|ui| {
+                        if let Some(first) = it.warnings.first() {
+                            let more = if it.warnings.len() > 1 { format!(" (+{})", it.warnings.len() - 1) } else { String::new() };
+                            ui.add(egui::Label::new(RichText::new(format!("⚠ {first}{more}")).color(amber())).truncate())
+                                .on_hover_text(it.warnings.join("\n"));
                         }
                     });
                 });
@@ -1168,7 +2156,7 @@ impl App {
 
     fn folders_tab(&mut self, ui: &mut egui::Ui) {
         let Some(plan) = &self.plan else {
-            empty_state(ui, false);
+            empty_state(ui, false, false);
             return;
         };
         let root = plan.root.clone();
@@ -1221,7 +2209,7 @@ impl App {
                 any = true;
                 ui.strong("Last apply");
                 ui.horizontal_wrapped(|ui| {
-                    chip(ui, "Moved", r.moved, green());
+                    chip(ui, "Renamed / moved", r.moved, green());
                     chip(ui, "Skipped", r.skipped, grey());
                     chip(ui, "Errors", r.errors.len(), red());
                     if r.copied_across_devices > 0 {
@@ -1230,7 +2218,7 @@ impl App {
                 });
                 if r.cancelled {
                     ui.label(
-                        RichText::new("Run was cancelled part-way; the moves done so far are in the undo log.")
+                        RichText::new("Run was cancelled part-way; the changes done so far are in the undo log.")
                             .color(amber()),
                     );
                 }
@@ -1253,6 +2241,9 @@ impl App {
                 }
                 error_list(ui, &r.errors);
                 ui.add_space(10.0);
+            }
+            if any {
+                ui.label(RichText::new("Click “Refresh preview” to re-scan the folder.").weak());
             }
             if !self.scan_errors.is_empty() {
                 any = true;
@@ -1285,22 +2276,32 @@ impl App {
         let mut close = false;
         let mut go = false;
         let modal = egui::Modal::new(egui::Id::unique("photosorter-confirm")).show(ctx, |ui| {
-            ui.set_width(440.0);
+            ui.set_width(480.0);
             match c {
                 Confirm::Apply => {
                     let n = self.counts;
-                    ui.heading("Move files?");
+                    ui.heading("Apply changes?");
                     ui.add_space(6.0);
                     ui.label(format!(
-                        "{} files will be moved into {} destination folders ({} of them new). Nothing is overwritten; name clashes get “ (1)”, “ (2)”…",
-                        n.to_move, n.dest_folders, n.new_folders
+                        "{} files will change: {} get a new name, {} move into {} destination folders ({} new).",
+                        n.to_move,
+                        n.renamed,
+                        n.to_move - n.rename_only,
+                        n.dest_folders,
+                        n.new_folders
                     ));
-                    ui.label("An undo log is written to the chosen folder first, so you can undo this run.");
+                    if n.warnings > 0 {
+                        ui.label(RichText::new(format!("{} files have notes in the preview (⚠).", n.warnings)).color(amber()));
+                    }
+                    ui.label("Nothing is overwritten or deleted; name clashes get “ (1)”, “ (2)”…");
+                    ui.label("An undo log is written to the chosen folder first, so Undo can restore every original name and location.");
                 }
                 Confirm::Undo { moves, started, log } => {
                     ui.heading("Undo last run?");
                     ui.add_space(6.0);
-                    ui.label(format!("Move {moves} files back to where they were (run started {started})."));
+                    ui.label(format!(
+                        "Restore {moves} files to their original names and folders (run started {started})."
+                    ));
                     ui.label("Only empty folders created by that run are removed. Nothing else is deleted.");
                     ui.label(RichText::new(log.display().to_string()).weak().small());
                 }
@@ -1308,7 +2309,7 @@ impl App {
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let label = match c {
-                    Confirm::Apply => "Move files",
+                    Confirm::Apply => "Apply",
                     Confirm::Undo { .. } => "Undo",
                 };
                 if ui.add(egui::Button::new(RichText::new(label).strong().color(Color32::WHITE)).fill(green())).clicked() {
@@ -1324,7 +2325,13 @@ impl App {
         }
         if go {
             match self.confirm.take() {
-                Some(Confirm::Apply) => self.start_apply(ctx),
+                Some(Confirm::Apply) => {
+                    if self.plan_is_current() {
+                        self.start_apply(ctx)
+                    } else {
+                        self.status = "The preview changed; please review it and click Apply again.".into();
+                    }
+                }
                 Some(Confirm::Undo { log, .. }) => self.start_undo(ctx, log),
                 None => {}
             }
@@ -1337,26 +2344,33 @@ impl App {
 fn kind_desc(k: SourceKind) -> &'static str {
     match k {
         SourceKind::Filename => "Filename",
-        SourceKind::Exif => "EXIF date taken",
-        SourceKind::Modified => "Modified date",
-        SourceKind::Created => "Created date",
+        SourceKind::Exif => "EXIF / video",
+        SourceKind::Modified => "Modified",
+        SourceKind::Created => "Created",
     }
 }
 
-fn empty_state(ui: &mut egui::Ui, after_run: bool) {
-    ui.add_space(40.0);
+fn empty_state(ui: &mut egui::Ui, after_run: bool, rule_error: bool) {
+    ui.add_space(30.0);
     ui.vertical_centered(|ui| {
         if after_run {
             ui.label(RichText::new("Run finished — see “Results / errors”.").size(18.0));
-            ui.label(RichText::new("Click Preview again to re-scan the folder.").weak());
+            ui.label(RichText::new("Click “Refresh preview” to re-scan the folder.").weak());
+        } else if rule_error {
+            ui.label(RichText::new("A rule has an error").size(20.0).strong().color(red()));
+            ui.label(RichText::new("Fix it in step 2 and the preview appears here.").weak());
         } else {
             ui.label(RichText::new("No preview yet").size(20.0).strong());
             ui.add_space(4.0);
             ui.label(
-                RichText::new("1. Choose or drop a folder   2. Check the options   3. Click “Preview (dry run)”")
-                    .weak(),
+                RichText::new(
+                    "1. Choose or drop a folder   2. Add rename rules (optional)   3. Choose the output folder option",
+                )
+                .weak(),
             );
-            ui.label(RichText::new("Nothing is moved until you click Apply and confirm.").weak());
+            ui.label(
+                RichText::new("The preview updates live. Nothing changes until you click Apply and confirm.").weak(),
+            );
         }
     });
 }
