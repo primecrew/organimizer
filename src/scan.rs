@@ -20,8 +20,7 @@ pub const MEDIA_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "jpe", "jfif", "gif", "bmp", "webp", "tif", "tiff", "heic", "heif", "avif", "jxl",
     // camera RAW
     "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "orf", "rw2", "raf", "pef", "srw", "x3f", "3fr",
-    "erf", "kdc", "mrw", "rwl", "iiq", "raw",
-    // video
+    "erf", "kdc", "mrw", "rwl", "iiq", "raw", // video
     "mp4", "mov", "m4v", "avi", "mkv", "wmv", "webm", "mpg", "mpeg", "mts", "m2ts", "3gp", "3g2", "flv", "vob",
 ];
 
@@ -120,7 +119,10 @@ pub fn scan(
                 if recursive {
                     subdirs.push(path);
                 }
-            } else if ft.is_file() && has_extension(&path, exts) && path.extension().is_some_and(|e| is_media_extension(&e.to_string_lossy())) {
+            } else if ft.is_file()
+                && has_extension(&path, exts)
+                && path.extension().is_some_and(|e| is_media_extension(&e.to_string_lossy()))
+            {
                 res.files.push(path);
             }
         }

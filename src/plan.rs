@@ -208,10 +208,16 @@ impl Stage for RenameStage {
         for r in &self.rules {
             r.apply(&mut parts, &rctx);
         }
-        // The extension may only change its letter case.
+        // The extension may only change to another image/video extension
+        // (Extension rule) or change its letter case.
         if !parts.ext.eq_ignore_ascii_case(ext) {
-            parts.warnings.push("A rule tried to change the extension; kept the original".into());
-            parts.ext = ext.to_string();
+            let new = parts.ext.trim_start_matches('.');
+            if parts.ext.starts_with('.') && crate::scan::is_media_extension(new) {
+                parts.warnings.push(format!("Extension changes from {ext} to {}", parts.ext));
+            } else {
+                parts.warnings.push("A rule tried to set a non-media extension; kept the original".into());
+                parts.ext = ext.to_string();
+            }
         }
         let (name, mut warns) = sanitize_file_name(&parts.stem, &parts.ext, stem);
         item.warnings.append(&mut parts.warnings);
@@ -359,15 +365,9 @@ pub fn unique_dest(dir: &Path, name: &str, reserved: &HashSet<String>) -> (PathB
 /// Like [`unique_dest`], but a path that is `source` itself (e.g. a
 /// case-only rename `a.JPG` -> `a.jpg` on a case-insensitive drive) does not
 /// count as taken.
-pub fn unique_dest_for(
-    dir: &Path,
-    name: &str,
-    reserved: &HashSet<String>,
-    source: Option<&Path>,
-) -> (PathBuf, bool) {
-    let taken = |p: &Path| {
-        reserved.contains(&key(p)) || (p.exists() && !source.map(|s| same_file(s, p)).unwrap_or(false))
-    };
+pub fn unique_dest_for(dir: &Path, name: &str, reserved: &HashSet<String>, source: Option<&Path>) -> (PathBuf, bool) {
+    let taken =
+        |p: &Path| reserved.contains(&key(p)) || (p.exists() && !source.map(|s| same_file(s, p)).unwrap_or(false));
     let first = dir.join(name);
     if !taken(&first) {
         return (first, false);

@@ -162,7 +162,8 @@ fn read_options(get: &dyn Fn(&str) -> Option<String>, o: &mut Preset) {
     }
     if let Some(v) = get("extensions")
         && !v.trim().is_empty()
-        && crate::scan::rejected_extensions(&v).len() < v.split([',', ';', ' ']).filter(|x| !x.trim().is_empty()).count()
+        && crate::scan::rejected_extensions(&v).len()
+            < v.split([',', ';', ' ']).filter(|x| !x.trim().is_empty()).count()
     {
         o.extensions = v;
     }
@@ -235,7 +236,8 @@ impl Settings {
         s.apply_preset(&o);
 
         for (sec, map) in parse_ini_sections(text) {
-            let Some(name) = sec.get(..7).filter(|p| p.eq_ignore_ascii_case("preset:")).map(|_| clean_preset_name(&sec[7..]))
+            let Some(name) =
+                sec.get(..7).filter(|p| p.eq_ignore_ascii_case("preset:")).map(|_| clean_preset_name(&sec[7..]))
             else {
                 continue;
             };
@@ -717,10 +719,13 @@ mod tests {
         let text = "[Rules]\nrule10 = case | on | mode=upper\nrule2 = bogus | on\nrule1 = add | off | text=%20x%7C | pos=end:2\nrulex = case\n[preset:]\nsource=exif\n[PRESET:Mine]\nrule1 = extcase | on | mode=upper\nsort_into_month_folders = no\nextensions = txt, pdf\n[Preset:mine]\nrule1 = case\n";
         let s = Settings::from_ini(text);
         assert_eq!(s.rules.len(), 2);
-        assert_eq!(s.rules[0], RuleSpec {
-            enabled: false,
-            kind: RuleKind::AddText(AddTextRule { text: " x|".into(), position: Position::FromEnd(2) })
-        });
+        assert_eq!(
+            s.rules[0],
+            RuleSpec {
+                enabled: false,
+                kind: RuleKind::AddText(AddTextRule { text: " x|".into(), position: Position::FromEnd(2) })
+            }
+        );
         assert_eq!(s.rules[1].kind, RuleKind::Case(CaseMode::Upper));
         assert_eq!(s.presets.len(), 1); // empty name skipped, duplicate name skipped
         let p = &s.presets[0];

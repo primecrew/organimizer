@@ -680,10 +680,7 @@ mod tests {
             })),
         ];
         let plan = plan_with(r, &mod_opts(false), &rules);
-        assert_eq!(
-            names(&plan, r),
-            vec![("a.jpg".into(), "b (1).jpg".into()), ("b.jpg".into(), "c.jpg".into())]
-        );
+        assert_eq!(names(&plan, r), vec![("a.jpg".into(), "b (1).jpg".into()), ("b.jpg".into(), "c.jpg".into())]);
         let rep = execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
         assert!(rep.errors.is_empty());
         assert_eq!(fs::read_to_string(r.join("b (1).jpg")).unwrap(), "A");
@@ -775,7 +772,8 @@ mod tests {
         touch(&r.join("notes.txt"), MAR_2024, "t");
         let exts = crate::scan::parse_extensions("");
         let stages = stages_with_rules(&[constant_name("x")], &exts).unwrap();
-        let plan = build_plan(r, &[r.join("notes.txt")], &mod_opts(false), &stages, &AtomicBool::new(false), &mut |_, _| {});
+        let plan =
+            build_plan(r, &[r.join("notes.txt")], &mod_opts(false), &stages, &AtomicBool::new(false), &mut |_, _| {});
         assert_eq!(plan.items[0].status, Status::Unchanged);
         assert_eq!(plan.items[0].new_name, "notes.txt");
         assert!(!plan.items[0].warnings.is_empty());
