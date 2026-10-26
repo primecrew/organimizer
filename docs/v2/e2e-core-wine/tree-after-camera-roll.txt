@@ -1,0 +1,45 @@
+.
+./Already sorted
+./Already sorted/March 2024
+./Already sorted/March 2024/2024-03-20 - Already sorted_001.jpg
+./Documents
+./Documents/report.pdf
+./Documents/todo.txt
+./Downloads
+./Downloads/February 2020
+./Downloads/February 2020/2020-02-29 - Downloads_003.jpg
+./Downloads/June 2021
+./Downloads/June 2021/2021-06-01 - Downloads_001.png
+./Downloads/June 2021/2021-06-01 - Downloads_002.png
+./Downloads/README.txt
+./February 2020
+./February 2020/2020-02-29 - sample-wine_003.jpg
+./February 2020/2020-02-29 - sample-wine_004.jpg
+./February 2020/2020-02-29 - sample-wine_005.jpg
+./Holiday 2023
+./Holiday 2023/DSC_0001.JPG.xmp
+./Holiday 2023/DSC_0002.jpg.json
+./Holiday 2023/December 2006
+./Holiday 2023/December 2006/2006-12-17 - Holiday 2023_004.jpg
+./Holiday 2023/July 2005
+./Holiday 2023/July 2005/2005-07-22 - Holiday 2023_001.jpg
+./Holiday 2023/July 2023
+./Holiday 2023/July 2023/2023-07-04 - Holiday 2023_003.jpg
+./Holiday 2023/September 2005
+./Holiday 2023/September 2005/2005-09-06 - Holiday 2023_002.jpg
+./Holiday 2023/Videos
+./Holiday 2023/Videos/July 2023
+./Holiday 2023/Videos/July 2023/2023-07-04 - Videos_001.mp4
+./March 2024
+./March 2024/2024-03-15 - sample-wine_001.jpg
+./March 2024/2024-03-15 - sample-wine_002.png
+./Phone
+./Phone/DCIM
+./Phone/DCIM/Camera
+./Phone/DCIM/Camera/January 2024
+./Phone/DCIM/Camera/January 2024/2024-01-01 - Camera_001.jpg
+./Phone/DCIM/Camera/January 2024/2024-01-01 - Camera_002.jpg
+./Phone/DCIM/Camera/January 2024/2024-01-01 - Camera_003.mp4
+./PhotoSorter-undo-20261025-192042.json
+./notes.txt
+./receipt.pdf

@@ -1,0 +1,2 @@
+Undo log: C:\PhotoSorterTest\sample-wine\PhotoSorter-undo-20261025-192042.json
+Undo: restored=17 dirs_removed=10 errors=[]
