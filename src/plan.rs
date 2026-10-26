@@ -213,7 +213,9 @@ impl Stage for RenameStage {
         if !parts.ext.eq_ignore_ascii_case(ext) {
             let new = parts.ext.trim_start_matches('.');
             if parts.ext.starts_with('.') && crate::scan::is_media_extension(new) {
-                parts.warnings.push(format!("Extension changes from {ext} to {}", parts.ext));
+                if !parts.warnings.iter().any(|w| w.starts_with("Extension")) {
+                    parts.warnings.push(format!("Extension changes from {ext} to {}", parts.ext));
+                }
             } else {
                 parts.warnings.push("A rule tried to set a non-media extension; kept the original".into());
                 parts.ext = ext.to_string();

@@ -691,8 +691,8 @@ impl RuleKind {
                 if v.is_empty() { "Padding (nothing selected)".into() } else { format!("Padding: {}", v.join(", ")) }
             }
             RuleKind::Randomize(r) => format!("Insert {} random characters {}", r.length, r.position.describe()),
-            RuleKind::Translit => "Transliterate to Latin letters (é→e, ß→ss, Ж→Zh …)".into(),
-            RuleKind::ReformatDate(r) => format!("Reformat dates “{}” → “{}”", r.find, r.to),
+            RuleKind::Translit => "Transliterate to Latin letters (é->e, ß->ss, Ж->Zh …)".into(),
+            RuleKind::ReformatDate(r) => format!("Reformat dates “{}” -> “{}”", r.find, r.to),
             RuleKind::Extension(ExtensionRule::Set(e)) => format!("Set extension to .{}", e.trim_start_matches('.')),
             RuleKind::Extension(ExtensionRule::Detect) => "Fix extension from the file's real type".into(),
             RuleKind::Numbering(n) => format!(
@@ -727,7 +727,7 @@ impl RuleKind {
             RuleKind::Replace(r) => build_replace_regex(r).map(|_| ()),
             RuleKind::Date(d) => check_date_format(&d.format),
             RuleKind::Remove(RemoveMode::Range { from, to }) if *from == 0 || to < from => {
-                Err("Range must satisfy 1 ≤ from ≤ to".into())
+                Err("Range must satisfy 1 <= from <= to".into())
             }
             RuleKind::Numbering(n) if n.padding > 32 => Err("Padding must be at most 32 digits".into()),
             RuleKind::Numbering(n) if n.repeat == 0 => Err("Repeat must be at least 1".into()),

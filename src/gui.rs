@@ -805,7 +805,7 @@ fn status_text(it: &plan::PlanItem) -> String {
                 (false, false) => "Move".to_string(),
             };
             if it.renamed_for_collision {
-                s.push_str(" (clash → suffix)");
+                s.push_str(" (clash -> suffix)");
             }
             s
         }
@@ -1061,14 +1061,14 @@ fn rule_editor(ui: &mut egui::Ui, idx: usize, kind: &mut RuleKind) {
                 ui.checkbox(strip_brackets, "Strip out content of brackets (…) […] {…}");
                 ui.checkbox(normalize_spaces, "Normalize unicode spaces");
                 ui.checkbox(strip_emoji, "Strip emoji");
-                ui.checkbox(strip_marks, "Strip accents / marks (é → e)");
+                ui.checkbox(strip_marks, "Strip accents / marks (é -> e)");
                 ui.checkbox(space_before_capitals, "Insert a space before capital letters");
                 ui.checkbox(trim, "Trim spaces, _ - . at start and end");
                 ui.checkbox(collapse_spaces, "Collapse multiple spaces");
                 ui.checkbox(collapse_repeats, "Collapse repeated _ - . separators");
-                ui.checkbox(underscores_to_spaces, "Underscores → spaces");
-                ui.checkbox(spaces_to_underscores, "Spaces → underscores");
-                ui.checkbox(dots_to_spaces, "Dots → spaces");
+                ui.checkbox(underscores_to_spaces, "Underscores -> spaces");
+                ui.checkbox(spaces_to_underscores, "Spaces -> underscores");
+                ui.checkbox(dots_to_spaces, "Dots -> spaces");
                 ui.checkbox(remove_illegal, "Remove characters not allowed on Windows");
             });
             ui.end_row();
@@ -1265,7 +1265,8 @@ fn rule_editor(ui: &mut egui::Ui, idx: usize, kind: &mut RuleKind) {
         RuleKind::Translit => {
             ui.label("");
             ui.label(
-                RichText::new("Latin accents and special letters (é→e, ß→ss, Ø→O), Cyrillic and Greek → Latin").weak(),
+                RichText::new("Latin accents and special letters (é->e, ß->ss, Ø->O), Cyrillic and Greek -> Latin")
+                    .weak(),
             );
             ui.end_row();
         }
@@ -1578,7 +1579,7 @@ impl App {
     /// Steps 1–3 in a resizable, scrollable top area.
     fn setup_panel(&mut self, ui: &mut egui::Ui) {
         let fs = self.s.font_size;
-        egui::Panel::top("setup").resizable(true).default_size(fs * 24.0).min_size(fs * 4.0).show(ui, |ui| {
+        egui::Panel::top("setup").resizable(true).default_size(fs * 29.0).min_size(fs * 4.0).show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.add_space(6.0);
                 let locked = matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo));
@@ -1967,7 +1968,7 @@ impl App {
                 chip(ui, "Files", c.total, accent(ui));
                 chip(ui, "Renamed", c.renamed, green());
                 chip(ui, "Moved", c.to_move - c.rename_only, green());
-                chip(ui, "Name clash → suffix", c.collisions, amber());
+                chip(ui, "Name clash (suffix added)", c.collisions, amber());
                 chip(ui, "Notes", c.warnings, amber());
                 chip(ui, "Unchanged / sorted", c.already_sorted + c.unchanged, grey());
                 chip(ui, "No date", c.no_date, amber());
@@ -2047,11 +2048,11 @@ impl App {
             .cell_layout(Layout::left_to_right(Align::Center))
             .column(Column::exact(44.0))
             .column(Column::initial(fs * 13.0).at_least(80.0).clip(true))
-            .column(Column::initial(fs * 13.0).at_least(80.0).clip(true))
-            .column(Column::initial(fs * 9.0).at_least(60.0).clip(true))
+            .column(Column::initial(fs * 17.0).at_least(80.0).clip(true))
+            .column(Column::initial(fs * 8.0).at_least(60.0).clip(true))
             .column(Column::initial(fs * 11.0).at_least(70.0).clip(true))
-            .column(Column::initial(fs * 8.0).at_least(60.0).clip(true))
-            .column(Column::initial(fs * 8.0).at_least(60.0).clip(true))
+            .column(Column::initial(fs * 7.5).at_least(60.0).clip(true))
+            .column(Column::initial(fs * 7.0).at_least(60.0).clip(true))
             .column(Column::remainder().at_least(60.0).clip(true))
             .header(row_h + 4.0, |mut h| {
                 h.col(|ui| {
@@ -2291,7 +2292,7 @@ impl App {
                         n.new_folders
                     ));
                     if n.warnings > 0 {
-                        ui.label(RichText::new(format!("{} files have notes in the preview (⚠).", n.warnings)).color(amber()));
+                        ui.label(RichText::new(format!("{} file(s) have notes in the preview (⚠).", n.warnings)).color(amber()));
                     }
                     ui.label("Nothing is overwritten or deleted; name clashes get “ (1)”, “ (2)”…");
                     ui.label("An undo log is written to the chosen folder first, so Undo can restore every original name and location.");
