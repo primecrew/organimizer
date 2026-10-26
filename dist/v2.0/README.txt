@@ -145,4 +145,4 @@ NOTES / CAVEATS
     skipped later (e.g. "no date" with fallback = skip).
 
 SHA-256 (PhotoSorter.exe)
-  @SHA@
+  5d8f93aebbac3ae7393835468f13a67b95de0b9faf5d54ca473521999268db6e
