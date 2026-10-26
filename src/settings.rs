@@ -637,4 +637,112 @@ mod tests {
         save(&p, &s).unwrap();
         assert_eq!(load_or_create(Some(p)).settings.font_size, 20.0);
     }
+
+    // ---------------------------------------------------------------- v2 --
+
+    use crate::rename::*;
+
+    fn sample_rules() -> Vec<RuleSpec> {
+        let mut v = vec![
+            RuleSpec::new(RuleKind::Replace(ReplaceRule {
+                find: r"^IMG_(\d+)".into(),
+                with: "Rome $1 | 100%".into(),
+                regex: true,
+                case_sensitive: true,
+                occurrence: Occurrence::First,
+            })),
+            RuleSpec::new(RuleKind::new_default("number").unwrap()),
+            RuleSpec::new(RuleKind::new_default("date").unwrap()),
+            RuleSpec::new(RuleKind::ExtensionCase(ExtCase::Lower)),
+        ];
+        v[1].enabled = false;
+        v
+    }
+
+    #[test]
+    fn rules_and_presets_roundtrip() {
+        let mut s = Settings::default();
+        s.last_folder = r"D:\Photos".into();
+        s.rules = sample_rules();
+        s.sort_into_folders = false;
+        assert!(s.save_preset("Holiday [Rome]; v2"));
+        // a second preset with different options
+        s.rules = vec![RuleSpec::new(RuleKind::Case(CaseMode::Title))];
+        s.sort_into_folders = true;
+        s.extensions = "jpg, mp4".into();
+        s.date.mode = DateMode::Only(SourceKind::Exif);
+        s.folder_template = "{YYYY}-{MM}".into();
+        assert!(s.save_preset("Title only"));
+        assert!(!s.save_preset("  [] "));
+        assert_eq!(s.presets.len(), 2);
+        assert_eq!(s.presets[0].name, "Holiday Rome v2");
+
+        let text = s.to_ini();
+        assert!(text.contains("[Preset:Holiday Rome v2]"), "{text}");
+        assert!(text.contains("[Rules]"));
+        assert!(text.contains("; 1. Change case to Title Case"));
+        let back = Settings::from_ini(&text);
+        assert_eq!(back, s);
+
+        // loading a preset brings back the whole chain + options
+        let mut t = back.clone();
+        let p = t.presets[0].clone();
+        t.apply_preset(&p);
+        assert_eq!(t.rules, sample_rules());
+        assert!(!t.sort_into_folders);
+        assert_eq!(t.extensions, Settings::default().extensions);
+        assert_eq!(t.last_folder, r"D:\Photos"); // not part of a preset
+
+        // overwrite by name (case-insensitive) and delete
+        assert!(t.save_preset("title ONLY"));
+        assert_eq!(t.presets.len(), 2);
+        assert!(t.delete_preset("TITLE only"));
+        assert!(!t.delete_preset("nope"));
+        assert_eq!(t.presets.len(), 1);
+    }
+
+    #[test]
+    fn v1_ini_loads_unchanged_with_no_rules() {
+        // what v0.1.0 wrote: no [Rules], no sort_into_month_folders
+        let v1 = "[General]\r\nlast_folder = C:\\Pics\r\ninclude_subfolders = true\r\nextensions = png, jpg, jpeg, gif, bmp, webp, tif, tiff, heic\r\n[Date]\r\nsource = auto\r\n[Output]\r\nfolder_template = {MMMM} {YYYY}\r\n";
+        let s = Settings::from_ini(v1);
+        assert!(s.rules.is_empty());
+        assert!(s.sort_into_folders);
+        assert!(s.presets.is_empty());
+        assert_eq!(s.extensions, crate::scan::V1_DEFAULT_EXTENSIONS);
+    }
+
+    #[test]
+    fn lenient_rules_and_presets() {
+        let text = "[Rules]\nrule10 = case | on | mode=upper\nrule2 = bogus | on\nrule1 = add | off | text=%20x%7C | pos=end:2\nrulex = case\n[preset:]\nsource=exif\n[PRESET:Mine]\nrule1 = extcase | on | mode=upper\nsort_into_month_folders = no\nextensions = txt, pdf\n[Preset:mine]\nrule1 = case\n";
+        let s = Settings::from_ini(text);
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[0], RuleSpec {
+            enabled: false,
+            kind: RuleKind::AddText(AddTextRule { text: " x|".into(), position: Position::FromEnd(2) })
+        });
+        assert_eq!(s.rules[1].kind, RuleKind::Case(CaseMode::Upper));
+        assert_eq!(s.presets.len(), 1); // empty name skipped, duplicate name skipped
+        let p = &s.presets[0];
+        assert_eq!(p.name, "Mine");
+        assert!(!p.sort_into_folders);
+        assert_eq!(p.extensions, DEFAULT_EXTENSIONS); // non-media list rejected
+        assert_eq!(p.rules, vec![RuleSpec::new(RuleKind::ExtensionCase(ExtCase::Upper))]);
+    }
+
+    #[test]
+    fn preset_sections_are_commented() {
+        let mut s = Settings::default();
+        s.rules = sample_rules();
+        s.save_preset("P");
+        let text = s.to_ini();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, l) in lines.iter().enumerate() {
+            let t = l.trim();
+            if !t.starts_with("rule") {
+                continue;
+            }
+            assert!(lines[i - 1].trim().starts_with(';'), "uncommented rule line: {t}");
+        }
+    }
 }

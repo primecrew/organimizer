@@ -793,7 +793,9 @@ pub fn is_reserved_device_name(name: &str) -> bool {
     match base.as_str() {
         "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" => true,
         _ => {
-            let (pre, num) = if base.len() > 3 { base.split_at(3) } else { return false };
+            let pre: String = base.chars().take(3).collect();
+            let num: String = base.chars().skip(3).collect();
+            let num = num.as_str();
             (pre == "COM" || pre == "LPT")
                 && matches!(num, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³")
         }
@@ -1097,5 +1099,424 @@ impl RuleSpec {
             }
         }
         Some(RuleSpec { enabled, kind })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::date_source::DateConfig;
+    use chrono::NaiveDate;
+    use std::path::PathBuf;
+
+    struct Env {
+        source: PathBuf,
+        cur: PathBuf,
+        base: PathBuf,
+        date: Option<ResolvedDate>,
+        cfg: DateConfig,
+    }
+
+    fn env(name: &str) -> Env {
+        let cur = PathBuf::from("/photos/Trip Rome");
+        Env {
+            source: cur.join(name),
+            base: cur.clone(),
+            cur,
+            date: Some(ResolvedDate {
+                date: NaiveDate::from_ymd_opt(2024, 3, 15).unwrap(),
+                datetime: NaiveDate::from_ymd_opt(2024, 3, 15).unwrap().and_hms_opt(14, 25, 30),
+                source: SourceKind::Filename,
+                via_fallback: false,
+            }),
+            cfg: DateConfig::default(),
+        }
+    }
+
+    /// Run a chain on one name (index/folder_index given).
+    fn run_at(name: &str, rules: &[RuleKind], index: u64, folder_index: u64) -> (String, Vec<String>) {
+        let e = env(name);
+        let specs: Vec<RuleSpec> = rules.iter().cloned().map(RuleSpec::new).collect();
+        let compiled = compile_rules(&specs).unwrap();
+        let (stem, ext) = crate::plan::split_name(name);
+        let ctx = RuleContext {
+            source: &e.source,
+            current_dir: &e.cur,
+            base_dir: &e.base,
+            date: e.date,
+            date_config: &e.cfg,
+            index,
+            folder_index,
+        };
+        let mut p = NameParts { stem: stem.into(), ext: ext.into(), warnings: vec![] };
+        for r in &compiled {
+            r.apply(&mut p, &ctx);
+        }
+        let (n, mut w) = sanitize_file_name(&p.stem, &p.ext, stem);
+        p.warnings.append(&mut w);
+        (n, p.warnings)
+    }
+
+    fn run(name: &str, rules: &[RuleKind]) -> String {
+        run_at(name, rules, 0, 0).0
+    }
+
+    fn replace(find: &str, with: &str, regex: bool, case: bool, occ: Occurrence) -> RuleKind {
+        RuleKind::Replace(ReplaceRule { find: find.into(), with: with.into(), regex, case_sensitive: case, occurrence: occ })
+    }
+
+    #[test]
+    fn replace_plain_and_case() {
+        assert_eq!(run("IMG_1234.jpg", &[replace("IMG_", "Rome_", false, false, Occurrence::All)]), "Rome_1234.jpg");
+        assert_eq!(run("img_1234.jpg", &[replace("IMG_", "X", false, false, Occurrence::All)]), "X1234.jpg");
+        assert_eq!(run("img_1234.jpg", &[replace("IMG_", "X", false, true, Occurrence::All)]), "img_1234.jpg");
+        assert_eq!(run("a-b-c.jpg", &[replace("-", "_", false, false, Occurrence::First)]), "a_b-c.jpg");
+        assert_eq!(run("a-b-c.jpg", &[replace("-", "_", false, false, Occurrence::Last)]), "a-b_c.jpg");
+        // plain mode does not interpret regex syntax or $ in the replacement
+        assert_eq!(run("a.b(1).jpg", &[replace(".b(1)", "$1", false, false, Occurrence::All)]), "a$1.jpg");
+        // the extension is never touched by replace
+        assert_eq!(run("jpg.jpg", &[replace("jpg", "png", false, false, Occurrence::All)]), "png.jpg");
+        // empty find = no-op
+        assert_eq!(run("x.jpg", &[replace("", "y", false, false, Occurrence::All)]), "x.jpg");
+    }
+
+    #[test]
+    fn replace_regex() {
+        let r = replace(r"^IMG_(\d{4})(\d{2})(\d{2})_.*$", "$1-$2-$3", true, false, Occurrence::All);
+        assert_eq!(run("IMG_20240315_142530.jpg", &[r]), "2024-03-15.jpg");
+        let r = replace(r"\s+", " ", true, false, Occurrence::All);
+        assert_eq!(run("a   b \t c.png", &[r]), "a b c.png");
+        let r = replace(r"(?P<n>\d+)", "#${n}", true, false, Occurrence::Last);
+        assert_eq!(run("a1b22.jpg", &[r]), "a1b#22.jpg");
+        // regex trying to inject a path separator is neutralised
+        let r = replace("a", r"..\..\evil", true, false, Occurrence::All);
+        let (n, w) = run_at("a.jpg", &[r], 0, 0);
+        assert_eq!(n, ".._.._evil.jpg");
+        assert!(!w.is_empty());
+        // invalid regex is reported, not applied
+        let bad = RuleSpec::new(replace("(unclosed", "", true, false, Occurrence::All));
+        let e = compile_rules(&[bad.clone()]).err().unwrap();
+        assert!(e.starts_with("Rule 1 (Replace): invalid regular expression"), "{e}");
+        assert_eq!(validate_chain(&[bad]).len(), 1);
+        // disabled invalid rules do not block
+        let mut off = RuleSpec::new(replace("(", "", true, false, Occurrence::All));
+        off.enabled = false;
+        assert!(compile_rules(&[off]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn remove_modes() {
+        let rm = |m: RemoveMode| RuleKind::Remove(m);
+        assert_eq!(run("IMG_1234.jpg", &[rm(RemoveMode::First(4))]), "1234.jpg");
+        assert_eq!(run("IMG_1234.jpg", &[rm(RemoveMode::Last(2))]), "IMG_12.jpg");
+        assert_eq!(run("IMG_1234.jpg", &[rm(RemoveMode::Range { from: 4, to: 5 })]), "IMG234.jpg");
+        assert_eq!(run("a b\tc.jpg", &[rm(RemoveMode::Whitespace)]), "abc.jpg");
+        assert_eq!(run("a1b2c3.jpg", &[rm(RemoveMode::Digits)]), "abc.jpg");
+        assert_eq!(
+            run("Hello (World).jpg", &[rm(RemoveMode::Chars { chars: "()o".into(), case_sensitive: false })]),
+            "Hell Wrld.jpg"
+        );
+        assert_eq!(
+            run("OoO.jpg", &[rm(RemoveMode::Chars { chars: "o".into(), case_sensitive: true })]),
+            "OO.jpg"
+        );
+        // unicode-safe positions
+        assert_eq!(run("ÄÖÜabc.jpg", &[rm(RemoveMode::First(2))]), "Üabc.jpg");
+        // removing everything keeps the original name
+        let (n, w) = run_at("abc.jpg", &[rm(RemoveMode::First(99))], 0, 0);
+        assert_eq!(n, "abc.jpg");
+        assert!(w[0].contains("empty"));
+        assert!(RuleKind::Remove(RemoveMode::Range { from: 0, to: 2 }).validate().is_err());
+        assert!(RuleKind::Remove(RemoveMode::Range { from: 3, to: 2 }).validate().is_err());
+    }
+
+    #[test]
+    fn add_text_positions() {
+        let add = |t: &str, p: Position| RuleKind::AddText(AddTextRule { text: t.into(), position: p });
+        assert_eq!(run("pic.jpg", &[add("Rome_", Position::Prefix)]), "Rome_pic.jpg");
+        assert_eq!(run("pic.jpg", &[add("_v2", Position::Suffix)]), "pic_v2.jpg");
+        assert_eq!(run("pic.jpg", &[add("-", Position::At(1))]), "p-ic.jpg");
+        assert_eq!(run("pic.jpg", &[add("-", Position::At(99))]), "pic-.jpg");
+        assert_eq!(run("pic.jpg", &[add("-", Position::FromEnd(1))]), "pi-c.jpg");
+        assert_eq!(run("pic.jpg", &[add("new", Position::Replace)]), "new.jpg");
+    }
+
+    #[test]
+    fn numbering() {
+        let num = |start, step, pad, pos, per_folder| {
+            RuleKind::Numbering(NumberingRule { start, step, padding: pad, position: pos, separator: "_".into(), per_folder })
+        };
+        assert_eq!(run_at("a.jpg", &[num(1, 1, 3, Position::Suffix, false)], 0, 0).0, "a_001.jpg");
+        assert_eq!(run_at("a.jpg", &[num(1, 1, 3, Position::Suffix, false)], 41, 0).0, "a_042.jpg");
+        assert_eq!(run_at("a.jpg", &[num(10, 5, 0, Position::Prefix, false)], 2, 0).0, "20_a.jpg");
+        // per-folder uses the folder index
+        assert_eq!(run_at("a.jpg", &[num(1, 1, 2, Position::Suffix, true)], 41, 3).0, "a_04.jpg");
+        assert_eq!(run_at("a.jpg", &[num(1, 1, 4, Position::Replace, true)], 0, 0).0, "0001.jpg");
+        assert_eq!(run_at("a.jpg", &[num(0, -1, 2, Position::Suffix, false)], 3, 0).0, "a_-03.jpg");
+        assert_eq!(format_number(7, 0), "7");
+        assert_eq!(format_number(1234, 3), "1234");
+        assert!(num(1, 1, 33, Position::Suffix, false).validate().is_err());
+    }
+
+    #[test]
+    fn case_modes() {
+        let c = |m| RuleKind::Case(m);
+        assert_eq!(run("Hello World.JPG", &[c(CaseMode::Lower)]), "hello world.JPG");
+        assert_eq!(run("Hello World.jpg", &[c(CaseMode::Upper)]), "HELLO WORLD.jpg");
+        assert_eq!(run("hello wORLD_trip-2024.jpg", &[c(CaseMode::Title)]), "Hello World_Trip-2024.jpg");
+        assert_eq!(run("HELLO wORLD. again.jpg", &[c(CaseMode::Sentence)]), "Hello world. again.jpg");
+        assert_eq!(run("2024 rome.jpg", &[c(CaseMode::Sentence)]), "2024 Rome.jpg");
+        assert_eq!(run("AbC.jpg", &[c(CaseMode::Invert)]), "aBc.jpg");
+        assert_eq!(run("straße.jpg", &[c(CaseMode::Upper)]), "STRASSE.jpg");
+    }
+
+    #[test]
+    fn clean_rule() {
+        let all = CleanRule::default();
+        assert_eq!(run("  my__photo  --  final..jpg", &[RuleKind::Clean(all.clone())]), "my_photo - final.jpg");
+        let u2s = CleanRule { underscores_to_spaces: true, ..all.clone() };
+        assert_eq!(run("_my_photo_.jpg", &[RuleKind::Clean(u2s)]), "my photo.jpg");
+        let s2u = CleanRule { spaces_to_underscores: true, ..all.clone() };
+        assert_eq!(run("my  photo.jpg", &[RuleKind::Clean(s2u)]), "my_photo.jpg");
+        let d2s = CleanRule { dots_to_spaces: true, ..all.clone() };
+        assert_eq!(run("Screenshot 2024.03.15 at 10.22.01.png", &[RuleKind::Clean(d2s)]), "Screenshot 2024 03 15 at 10 22 01.png");
+        let off = CleanRule {
+            trim: false,
+            collapse_spaces: false,
+            underscores_to_spaces: false,
+            spaces_to_underscores: false,
+            dots_to_spaces: false,
+            remove_illegal: false,
+            collapse_repeats: false,
+        };
+        assert_eq!(run(" a  b .jpg", &[RuleKind::Clean(off)]), " a  b .jpg");
+    }
+
+    #[test]
+    fn insert_date() {
+        let d = |fmt: &str, pos| {
+            RuleKind::Date(DateRule { source: None, format: fmt.into(), position: pos, separator: " ".into() })
+        };
+        assert_eq!(run("beach.jpg", &[d("%Y-%m-%d", Position::Prefix)]), "2024-03-15 beach.jpg");
+        assert_eq!(run("beach.jpg", &[d("%Y%m%d_%H%M%S", Position::Replace)]), "20240315_142530.jpg");
+        // ':' is not allowed on Windows -> '-'
+        assert_eq!(run("beach.jpg", &[d("%H:%M", Position::Suffix)]), "beach 14-25.jpg");
+        assert_eq!(run("beach.jpg", &[d("%B %Y", Position::Suffix)]), "beach March 2024.jpg");
+        assert!(check_date_format("%Y-%m-%d").is_ok());
+        assert!(check_date_format("%Q").is_err());
+        assert!(check_date_format("").is_err());
+        assert!(check_date_format("%z").is_err());
+        assert!(d("%Q", Position::Prefix).validate().is_err());
+    }
+
+    #[test]
+    fn insert_date_without_date_warns() {
+        let e = Env { date: None, ..env("x.jpg") };
+        let rule = DateRule { source: None, format: "%Y".into(), position: Position::Prefix, separator: " ".into() };
+        let ctx = RuleContext {
+            source: &e.source,
+            current_dir: &e.cur,
+            base_dir: &e.base,
+            date: None,
+            date_config: &e.cfg,
+            index: 0,
+            folder_index: 0,
+        };
+        let mut p = NameParts { stem: "x".into(), ext: ".jpg".into(), warnings: vec![] };
+        rule.apply(&mut p, &ctx);
+        assert_eq!(p.stem, "x");
+        assert_eq!(p.warnings.len(), 1);
+    }
+
+    #[test]
+    fn insert_date_from_specific_source() {
+        // Filename source on a dated name, independent of the plan date
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("IMG_20190704_101010.jpg");
+        std::fs::write(&src, b"x").unwrap();
+        let cfg = DateConfig::default();
+        let ctx = RuleContext {
+            source: &src,
+            current_dir: dir.path(),
+            base_dir: dir.path(),
+            date: None,
+            date_config: &cfg,
+            index: 0,
+            folder_index: 0,
+        };
+        let rule = DateRule {
+            source: Some(SourceKind::Filename),
+            format: "%Y-%m".into(),
+            position: Position::Replace,
+            separator: String::new(),
+        };
+        let mut p = NameParts { stem: "IMG_20190704_101010".into(), ext: ".jpg".into(), warnings: vec![] };
+        rule.apply(&mut p, &ctx);
+        assert_eq!(p.stem, "2019-07");
+    }
+
+    #[test]
+    fn parent_folder() {
+        let r = RuleKind::ParentFolder(ParentRule { position: Position::Prefix, separator: " - ".into() });
+        assert_eq!(run("IMG_1.jpg", &[r]), "Trip Rome - IMG_1.jpg");
+        let r = RuleKind::ParentFolder(ParentRule { position: Position::Suffix, separator: "_".into() });
+        assert_eq!(run("IMG_1.jpg", &[r]), "IMG_1_Trip Rome.jpg");
+    }
+
+    #[test]
+    fn extension_case() {
+        assert_eq!(run("Photo.JPG", &[RuleKind::ExtensionCase(ExtCase::Lower)]), "Photo.jpg");
+        assert_eq!(run("Photo.jpeg", &[RuleKind::ExtensionCase(ExtCase::Upper)]), "Photo.JPEG");
+    }
+
+    #[test]
+    fn chain_order_matters() {
+        let add = RuleKind::AddText(AddTextRule { text: "img ".into(), position: Position::Prefix });
+        let up = RuleKind::Case(CaseMode::Upper);
+        assert_eq!(run("a.jpg", &[add.clone(), up.clone()]), "IMG A.jpg");
+        assert_eq!(run("a.jpg", &[up, add]), "img A.jpg");
+        // a realistic chain
+        let chain = [
+            replace(r"^(IMG|PXL|DSC)[_-]?", "", true, false, Occurrence::All),
+            RuleKind::Remove(RemoveMode::Last(7)),
+            RuleKind::Date(DateRule {
+                source: None,
+                format: "%Y-%m-%d".into(),
+                position: Position::Replace,
+                separator: String::new(),
+            }),
+            RuleKind::ParentFolder(ParentRule { position: Position::Suffix, separator: " ".into() }),
+            RuleKind::Numbering(NumberingRule {
+                start: 1,
+                step: 1,
+                padding: 3,
+                position: Position::Suffix,
+                separator: " #".into(),
+                per_folder: true,
+            }),
+            RuleKind::Clean(CleanRule { spaces_to_underscores: true, ..CleanRule::default() }),
+            RuleKind::ExtensionCase(ExtCase::Lower),
+        ];
+        assert_eq!(run_at("IMG_20240315_142530.JPG", &chain, 0, 4).0, "2024-03-15_Trip_Rome_#005.jpg");
+    }
+
+    #[test]
+    fn windows_name_rules() {
+        for n in ["CON", "con.jpg", "Nul.tar.jpg", "COM1.png", "lpt9.jpg", "AUX .jpg", "COM¹.jpg", "CONIN$.jpg"] {
+            assert!(is_reserved_device_name(n), "{n}");
+        }
+        for n in ["CONSOLE.jpg", "COM10.jpg", "LPT.jpg", "icon.jpg", "com.jpg", "nul_.jpg"] {
+            assert!(!is_reserved_device_name(n), "{n}");
+        }
+        let (n, w) = sanitize_file_name("con", ".jpg", "x");
+        assert_eq!(n, "con_.jpg");
+        assert_eq!(w.len(), 1);
+        let (n, _) = sanitize_file_name("NUL.tar", ".jpg", "x");
+        assert_eq!(n, "NUL_.tar.jpg");
+        let (n, _) = sanitize_file_name("a<b>c:d\"e/f\\g|h?i*j", ".png", "x");
+        assert_eq!(n, "a_b_c_d_e_f_g_h_i_j.png");
+        let (n, _) = sanitize_file_name("tab\there", ".png", "x");
+        assert_eq!(n, "tab_here.png");
+        let (n, w) = sanitize_file_name("name. . ", "", "x");
+        assert_eq!(n, "name");
+        assert!(!w.is_empty());
+        let (n, _) = sanitize_file_name(" . ", ".jpg", "orig");
+        assert_eq!(n, "orig.jpg");
+        let long = "é".repeat(300);
+        let (n, w) = sanitize_file_name(&long, ".jpeg", "x");
+        assert_eq!(utf16_len(&n), 255);
+        assert!(n.ends_with(".jpeg"));
+        assert!(w.iter().any(|w| w.contains("shortened")));
+        // surrogate pairs count as 2 UTF-16 units
+        let emoji = "📷".repeat(200);
+        let (n, _) = sanitize_file_name(&emoji, ".jpg", "x");
+        assert!(utf16_len(&n) <= 255);
+        assert!(windows_name_problems("ok.jpg").is_empty());
+        assert_eq!(windows_name_problems("bad?.jpg").len(), 1);
+        assert_eq!(windows_name_problems("PRN.jpg").len(), 1);
+        assert_eq!(windows_name_problems("x.").len(), 1);
+        // whatever the rules do, the result is a single path component
+        let evil = [r"..", r"..\..", "a/b", "C:", "\\\\server\\share", ".", "CON", ""];
+        for e in evil {
+            let (n, _) = sanitize_file_name(e, ".jpg", "orig");
+            let comps: Vec<_> = Path::new(&n).components().collect();
+            assert_eq!(comps.len(), 1, "{e} -> {n}");
+            assert!(matches!(comps[0], std::path::Component::Normal(_)), "{e} -> {n}");
+            assert!(windows_name_problems(&n).is_empty(), "{e} -> {n}");
+        }
+    }
+
+    fn all_rule_samples() -> Vec<RuleSpec> {
+        let mut v: Vec<RuleSpec> = RULE_TYPES.iter().map(|k| RuleSpec::new(RuleKind::new_default(k).unwrap())).collect();
+        v.push(RuleSpec {
+            enabled: false,
+            kind: replace(" |odd%\"; #[x]=y ", "  a|b ", true, true, Occurrence::Last),
+        });
+        v.push(RuleSpec::new(RuleKind::Remove(RemoveMode::Chars { chars: "|%()".into(), case_sensitive: true })));
+        v.push(RuleSpec::new(RuleKind::Remove(RemoveMode::Range { from: 2, to: 5 })));
+        v.push(RuleSpec::new(RuleKind::Remove(RemoveMode::Last(3))));
+        v.push(RuleSpec::new(RuleKind::Remove(RemoveMode::Whitespace)));
+        v.push(RuleSpec::new(RuleKind::Remove(RemoveMode::Digits)));
+        v.push(RuleSpec::new(RuleKind::AddText(AddTextRule { text: "ünï cødé ".into(), position: Position::FromEnd(2) })));
+        v.push(RuleSpec::new(RuleKind::Numbering(NumberingRule {
+            start: -5,
+            step: 10,
+            padding: 0,
+            position: Position::At(3),
+            separator: "".into(),
+            per_folder: false,
+        })));
+        v.push(RuleSpec::new(RuleKind::Case(CaseMode::Invert)));
+        v.push(RuleSpec::new(RuleKind::Clean(CleanRule {
+            trim: false,
+            collapse_spaces: false,
+            underscores_to_spaces: true,
+            spaces_to_underscores: true,
+            dots_to_spaces: true,
+            remove_illegal: false,
+            collapse_repeats: false,
+        })));
+        v.push(RuleSpec::new(RuleKind::Date(DateRule {
+            source: Some(SourceKind::Exif),
+            format: "%Y|%m %%".into(),
+            position: Position::Replace,
+            separator: " | ".into(),
+        })));
+        v.push(RuleSpec::new(RuleKind::ParentFolder(ParentRule { position: Position::Suffix, separator: "".into() })));
+        v.push(RuleSpec::new(RuleKind::ExtensionCase(ExtCase::Upper)));
+        v
+    }
+
+    #[test]
+    fn ini_value_roundtrip() {
+        for r in all_rule_samples() {
+            let s = r.to_ini_value();
+            assert!(!s.contains('\n') && !s.contains('"'), "{s}");
+            assert_eq!(RuleSpec::from_ini_value(&s), Some(r.clone()), "{s}");
+        }
+        assert_eq!(decode_value(&encode_value(" %|\"\n\t x ")), " %|\"\n\t x ");
+        assert_eq!(decode_value("%zz%4"), "%zz%4");
+        assert_eq!(decode_value("%C3%A9"), "é");
+        assert!(RuleSpec::from_ini_value("teleport | on | to=mars").is_none());
+        assert!(RuleSpec::from_ini_value("").is_none());
+        // lenient: missing keys -> defaults; garbage keys ignored
+        let r = RuleSpec::from_ini_value("NUMBER|off|pad=abc|bogus").unwrap();
+        assert!(!r.enabled);
+        assert_eq!(r.kind, RuleKind::new_default("number").unwrap());
+        let r = RuleSpec::from_ini_value("number | on | pad=999").unwrap();
+        assert!(matches!(r.kind, RuleKind::Numbering(NumberingRule { padding: 32, .. })));
+    }
+
+    #[test]
+    fn summaries_and_positions() {
+        for r in all_rule_samples() {
+            assert!(!r.kind.summary().is_empty());
+            assert_ne!(r.kind.type_label(), "?");
+        }
+        for p in [Position::Prefix, Position::Suffix, Position::At(3), Position::FromEnd(2), Position::Replace] {
+            assert_eq!(Position::from_key(&p.key()), Some(p));
+        }
+        assert_eq!(Position::from_key("at:x"), None);
+        assert!(RuleKind::new_default("nope").is_none());
     }
 }
