@@ -5,7 +5,9 @@
 //! * `std::fs::rename` first, copy + verify + delete only across devices;
 //! * the undo log is written *before* the first move and kept up to date,
 //!   so an interrupted run can still be undone;
-//! * undo only ever deletes folders that this app created and that are empty.
+//! * undo only ever deletes folders that this app created and that are empty;
+//! * renames (from the rule chain) are recorded exactly like moves, so undo
+//!   restores both the original name and the original folder.
 
 use std::collections::HashSet;
 use std::fs;
@@ -15,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::plan::{Plan, Status, unique_dest};
+use crate::plan::{Plan, Status, same_file, unique_dest_for};
 
 pub const UNDO_PREFIX: &str = "PhotoSorter-undo-";
 pub const UNDO_DONE_SUFFIX: &str = ".undone.json";
@@ -70,6 +72,11 @@ fn is_cross_device(e: &io::Error) -> bool {
 /// needed (different volume).
 pub fn move_file(from: &Path, to: &Path) -> io::Result<bool> {
     if to.exists() {
+        if from != to && same_file(from, to) {
+            // case-only rename on a case-insensitive drive (a.JPG -> a.jpg)
+            case_only_rename(from, to)?;
+            return Ok(false);
+        }
         return Err(io::Error::new(io::ErrorKind::AlreadyExists, "destination already exists"));
     }
     match fs::rename(from, to) {
@@ -80,6 +87,31 @@ pub fn move_file(from: &Path, to: &Path) -> io::Result<bool> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Rename via a unique temporary name in the same folder, so that only the
+/// letter case changes. Rolls back if the second step fails.
+fn case_only_rename(from: &Path, to: &Path) -> io::Result<()> {
+    let dir = from.parent().unwrap_or(Path::new("."));
+    let mut n = 0u32;
+    let tmp = loop {
+        let t = dir.join(format!(".photosorter-case-{}-{n}.tmp", std::process::id()));
+        if !t.exists() {
+            break t;
+        }
+        n += 1;
+    };
+    fs::rename(from, &tmp)?;
+    if to.exists() {
+        // something else appeared meanwhile: put it back, never overwrite
+        let _ = fs::rename(&tmp, from);
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "destination already exists"));
+    }
+    if let Err(e) = fs::rename(&tmp, to) {
+        let _ = fs::rename(&tmp, from);
+        return Err(e);
+    }
+    Ok(())
 }
 
 fn copy_then_delete(from: &Path, to: &Path) -> io::Result<()> {
@@ -183,8 +215,8 @@ pub fn execute(plan: &Plan, cancel: &AtomicBool, progress: &mut dyn FnMut(usize,
             }
         }
         // Re-check collisions at apply time (disk may have changed).
-        let dest = if item.dest_path.exists() {
-            unique_dest(&item.dest_dir, &item.new_name, &HashSet::new()).0
+        let dest = if item.dest_path.exists() && !same_file(&item.source, &item.dest_path) {
+            unique_dest_for(&item.dest_dir, &item.new_name, &HashSet::new(), Some(&item.source)).0
         } else {
             item.dest_path.clone()
         };
@@ -257,7 +289,7 @@ pub fn undo(log_path: &Path, progress: &mut dyn FnMut(usize, usize)) -> UndoRepo
             remaining.push(m.clone());
             continue;
         }
-        if m.from.exists() {
+        if m.from.exists() && !same_file(&m.from, &m.to) {
             report.errors.push((m.from.clone(), "Original location is occupied, not overwriting".into()));
             remaining.push(m.clone());
             continue;

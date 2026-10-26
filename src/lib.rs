@@ -21,6 +21,7 @@ pub mod date_source;
 pub mod filename_date;
 pub mod ops;
 pub mod plan;
+pub mod rename;
 pub mod scan;
 pub mod settings;
 pub mod template;

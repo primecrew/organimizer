@@ -4,18 +4,24 @@
 //! Each file becomes a [`PlanItem`] which is passed through an ordered list of
 //! [`Stage`]s. Today:
 //!
-//! 1. [`RenameStage`] – placeholder for future Renamer-style rules; keeps the
-//!    original name.
+//! 1. [`RenameStage`] – ordered Renamer-style rules ([`crate::rename`]);
+//!    with no enabled rules it keeps the original name (v1 behaviour).
 //! 2. [`FolderStage`] – computes the `Month YYYY` destination folder from the
-//!    folder-name template.
+//!    folder-name template (or keeps the current folder when sorting into
+//!    month folders is switched off).
 //!
-//! Then collisions are resolved (never overwrite: " (1)", " (2)", ...).
+//! Then collisions are resolved (never overwrite: " (1)", " (2)", ...),
+//! including collisions between files renamed within the same batch.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::date_source::{DateConfig, ResolvedDate, resolve_date};
+use crate::rename::{
+    MAX_PATH_UTF16, NameParts, RenameRule, RuleContext, RuleSpec, compile_rules, sanitize_file_name, utf16_len,
+};
 use crate::template::{DEFAULT_TEMPLATE, format_folder_name, is_sorted_folder_name};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +34,8 @@ pub enum Status {
     NoDate,
     /// Could not read the file, etc.
     Error(String),
+    /// Month-folder sorting is off and the rules do not change the name.
+    Unchanged,
 }
 
 impl Status {
@@ -37,6 +45,7 @@ impl Status {
             Status::AlreadySorted => "Already sorted",
             Status::NoDate => "No date (skipped)",
             Status::Error(_) => "Error",
+            Status::Unchanged => "Unchanged",
         }
     }
 }
@@ -60,6 +69,8 @@ pub struct PlanItem {
     /// True if a " (n)" suffix was added.
     pub renamed_for_collision: bool,
     pub status: Status,
+    /// Notes for the preview (name fixed for Windows, long path, ...).
+    pub warnings: Vec<String>,
 }
 
 impl PlanItem {
@@ -76,8 +87,32 @@ impl PlanItem {
             dest_path: PathBuf::new(),
             renamed_for_collision: false,
             status: Status::Move,
+            warnings: Vec::new(),
             source,
         }
+    }
+
+    /// The file's current name.
+    pub fn original_name(&self) -> String {
+        self.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    /// Final file name (after rules and any collision suffix).
+    pub fn final_name(&self) -> String {
+        if self.dest_path.as_os_str().is_empty() {
+            return self.new_name.clone();
+        }
+        self.dest_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    }
+
+    /// True if the file will get a different name (rules or collision).
+    pub fn is_renamed(&self) -> bool {
+        self.status == Status::Move && self.final_name() != self.original_name()
+    }
+
+    /// True if the file stays in its folder and is only renamed.
+    pub fn is_rename_only(&self) -> bool {
+        self.status == Status::Move && self.dest_dir == self.current_dir
     }
 }
 
@@ -85,11 +120,14 @@ impl PlanItem {
 pub struct PlanOptions {
     pub template: String,
     pub date: DateConfig,
+    /// Move files into `Month YYYY` folders (v1 behaviour). When false the
+    /// files stay in their folder and only the rename rules apply.
+    pub sort_into_folders: bool,
 }
 
 impl Default for PlanOptions {
     fn default() -> Self {
-        PlanOptions { template: DEFAULT_TEMPLATE.to_string(), date: DateConfig::default() }
+        PlanOptions { template: DEFAULT_TEMPLATE.to_string(), date: DateConfig::default(), sort_into_folders: true }
     }
 }
 
@@ -106,18 +144,86 @@ pub trait Stage: Send + Sync {
     fn process(&self, item: &mut PlanItem, ctx: &StageContext);
 }
 
-/// Future home of Renamer-style rules (find/replace, case, numbering, date
-/// insertion...). Currently keeps the original file name.
+/// Runs the ordered rename rules (see [`crate::rename`]) on the file name.
+/// With no rules this is a no-op, which keeps v1 behaviour byte-identical.
+///
+/// Safety: only files whose extension is in `allowed_exts` are renamed, the
+/// extension can only change its letter case, and the result is sanitised
+/// into a single valid Windows file name (never a path), so a rename can
+/// never move a file to another folder by itself.
 #[derive(Default)]
 pub struct RenameStage {
-    // pub rules: Vec<Box<dyn RenameRule>>,
+    pub rules: Vec<Box<dyn RenameRule>>,
+    /// Lower-case extensions (no dot) that may be renamed.
+    pub allowed_exts: Vec<String>,
+    /// (files renamed so far, per source folder counters)
+    counters: Mutex<(u64, HashMap<PathBuf, u64>)>,
+}
+
+impl RenameStage {
+    pub fn new(rules: Vec<Box<dyn RenameRule>>, allowed_exts: Vec<String>) -> Self {
+        RenameStage { rules, allowed_exts, counters: Mutex::new((0, HashMap::new())) }
+    }
+
+    /// Compile the enabled rules of `specs`.
+    pub fn from_specs(specs: &[RuleSpec], allowed_exts: Vec<String>) -> Result<Self, String> {
+        Ok(Self::new(compile_rules(specs)?, allowed_exts))
+    }
 }
 
 impl Stage for RenameStage {
     fn name(&self) -> &str {
         "rename"
     }
-    fn process(&self, _item: &mut PlanItem, _ctx: &StageContext) {}
+    fn process(&self, item: &mut PlanItem, ctx: &StageContext) {
+        if self.rules.is_empty() {
+            return;
+        }
+        let original = item.new_name.clone();
+        let (stem, ext) = split_name(&original);
+        let ext_key = ext.trim_start_matches('.').to_ascii_lowercase();
+        if ext.is_empty() || !self.allowed_exts.contains(&ext_key) {
+            item.warnings.push("Not an image/video extension: name left unchanged".into());
+            return;
+        }
+        let (index, folder_index) = {
+            let mut c = self.counters.lock().unwrap_or_else(|e| e.into_inner());
+            let i = c.0;
+            c.0 += 1;
+            let f = c.1.entry(item.current_dir.clone()).or_insert(0);
+            let fi = *f;
+            *f += 1;
+            (i, fi)
+        };
+        let rctx = RuleContext {
+            source: &item.source,
+            current_dir: &item.current_dir,
+            base_dir: &item.base_dir,
+            date: item.date,
+            date_config: &ctx.options.date,
+            index,
+            folder_index,
+        };
+        let mut parts = NameParts { stem: stem.to_string(), ext: ext.to_string(), warnings: Vec::new() };
+        for r in &self.rules {
+            r.apply(&mut parts, &rctx);
+        }
+        // The extension may only change its letter case.
+        if !parts.ext.eq_ignore_ascii_case(ext) {
+            parts.warnings.push("A rule tried to change the extension; kept the original".into());
+            parts.ext = ext.to_string();
+        }
+        let (name, mut warns) = sanitize_file_name(&parts.stem, &parts.ext, stem);
+        item.warnings.append(&mut parts.warnings);
+        item.warnings.append(&mut warns);
+        // Belt and braces: must be one plain path component.
+        let comp: Vec<_> = Path::new(&name).components().collect();
+        if comp.len() != 1 || !matches!(comp[0], std::path::Component::Normal(_)) {
+            item.warnings.push("Rules produced an invalid name; kept the original".into());
+            return;
+        }
+        item.new_name = name;
+    }
 }
 
 /// Computes the destination folder from the template.
@@ -128,6 +234,13 @@ impl Stage for FolderStage {
         "folder"
     }
     fn process(&self, item: &mut PlanItem, ctx: &StageContext) {
+        if !ctx.options.sort_into_folders {
+            item.dest_dir = item.current_dir.clone();
+            if item.new_name == item.original_name() {
+                item.status = Status::Unchanged;
+            }
+            return;
+        }
         let Some(date) = item.date else {
             item.status = Status::NoDate;
             return;
@@ -139,7 +252,12 @@ impl Stage for FolderStage {
         if item.current_dir.parent() == Some(item.base_dir.as_path())
             && cur_name.as_deref() == Some(&folder.to_lowercase())
         {
-            item.status = Status::AlreadySorted;
+            if item.new_name == item.original_name() {
+                item.status = Status::AlreadySorted;
+            } else {
+                // in the right folder already: rename in place
+                item.dest_dir = item.current_dir.clone();
+            }
         }
         item.dest_folder_name = folder;
     }
@@ -147,6 +265,12 @@ impl Stage for FolderStage {
 
 pub fn default_stages() -> Vec<Box<dyn Stage>> {
     vec![Box::new(RenameStage::default()), Box::new(FolderStage)]
+}
+
+/// Rename rules (enabled ones, in order) followed by the folder stage.
+/// `allowed_exts` is the scan extension list (see [`crate::scan::parse_extensions`]).
+pub fn stages_with_rules(specs: &[RuleSpec], allowed_exts: &[String]) -> Result<Vec<Box<dyn Stage>>, String> {
+    Ok(vec![Box::new(RenameStage::from_specs(specs, allowed_exts.to_vec())?), Box::new(FolderStage)])
 }
 
 #[derive(Debug, Clone, Default)]
@@ -163,6 +287,13 @@ pub struct PlanCounts {
     pub no_date: usize,
     pub errors: usize,
     pub collisions: usize,
+    /// Files that get a new name (rules or collision suffix).
+    pub renamed: usize,
+    /// Files that only get renamed and stay in their folder.
+    pub rename_only: usize,
+    pub unchanged: usize,
+    /// Files with at least one preview note.
+    pub warnings: usize,
     pub new_folders: usize,
     /// Distinct destination folders (new or existing).
     pub dest_folders: usize,
@@ -180,6 +311,12 @@ impl Plan {
                     if it.renamed_for_collision {
                         c.collisions += 1;
                     }
+                    if it.is_renamed() {
+                        c.renamed += 1;
+                    }
+                    if it.is_rename_only() {
+                        c.rename_only += 1;
+                    }
                     all_folders.insert(it.dest_dir.clone());
                     if !it.dest_dir.exists() {
                         folders.insert(it.dest_dir.clone());
@@ -188,6 +325,10 @@ impl Plan {
                 Status::AlreadySorted => c.already_sorted += 1,
                 Status::NoDate => c.no_date += 1,
                 Status::Error(_) => c.errors += 1,
+                Status::Unchanged => c.unchanged += 1,
+            }
+            if !it.warnings.is_empty() {
+                c.warnings += 1;
             }
         }
         c.new_folders = folders.len();
@@ -204,7 +345,7 @@ pub fn split_name(name: &str) -> (&str, &str) {
     }
 }
 
-fn key(p: &Path) -> String {
+pub(crate) fn key(p: &Path) -> String {
     // Windows file systems are case-insensitive.
     p.to_string_lossy().to_lowercase()
 }
@@ -212,18 +353,53 @@ fn key(p: &Path) -> String {
 /// Find a free path in `dir` for `name`, appending " (1)", " (2)" ... before
 /// the extension. A path is taken if it exists on disk or is in `reserved`.
 pub fn unique_dest(dir: &Path, name: &str, reserved: &HashSet<String>) -> (PathBuf, bool) {
+    unique_dest_for(dir, name, reserved, None)
+}
+
+/// Like [`unique_dest`], but a path that is `source` itself (e.g. a
+/// case-only rename `a.JPG` -> `a.jpg` on a case-insensitive drive) does not
+/// count as taken.
+pub fn unique_dest_for(
+    dir: &Path,
+    name: &str,
+    reserved: &HashSet<String>,
+    source: Option<&Path>,
+) -> (PathBuf, bool) {
+    let taken = |p: &Path| {
+        reserved.contains(&key(p)) || (p.exists() && !source.map(|s| same_file(s, p)).unwrap_or(false))
+    };
     let first = dir.join(name);
-    if !first.exists() && !reserved.contains(&key(&first)) {
+    if !taken(&first) {
         return (first, false);
     }
     let (stem, ext) = split_name(name);
     for n in 1.. {
         let cand = dir.join(format!("{stem} ({n}){ext}"));
-        if !cand.exists() && !reserved.contains(&key(&cand)) {
+        if !taken(&cand) {
             return (cand, true);
         }
     }
     unreachable!()
+}
+
+/// Do `a` and `b` name the same existing file? (Unix: same inode; Windows:
+/// same path ignoring case, as NTFS is case-insensitive.)
+pub fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return a.exists();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::metadata(a), std::fs::metadata(b)) {
+            (Ok(x), Ok(y)) => x.dev() == y.dev() && x.ino() == y.ino(),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        key(a) == key(b) && a.exists()
+    }
 }
 
 /// Build a plan for `files` (as returned by [`crate::scan::scan`]).
@@ -276,8 +452,14 @@ pub fn build_plan(
         }
 
         if item.status == Status::Move {
-            let (dest, renamed) = unique_dest(&item.dest_dir, &item.new_name, &reserved);
+            let (dest, renamed) = unique_dest_for(&item.dest_dir, &item.new_name, &reserved, Some(&item.source));
             reserved.insert(key(&dest));
+            if utf16_len(&dest.to_string_lossy()) > MAX_PATH_UTF16 {
+                item.warnings.push(format!(
+                    "Full path is longer than {} characters; some Windows programs cannot open it",
+                    MAX_PATH_UTF16 + 1
+                ));
+            }
             item.dest_path = dest;
             item.renamed_for_collision = renamed;
         }
@@ -308,6 +490,7 @@ mod tests {
         PlanOptions {
             template: DEFAULT_TEMPLATE.into(),
             date: DateConfig { mode: DateMode::Only(SourceKind::Modified), ..Default::default() },
+            ..Default::default()
         }
     }
 
@@ -414,6 +597,7 @@ mod tests {
                 fallback: crate::date_source::Fallback::Skip,
                 ..Default::default()
             },
+            ..Default::default()
         };
         let plan = plan_for(r, &opts);
         let h = plan.items.iter().find(|i| i.source.ends_with("holiday.jpg")).unwrap();
