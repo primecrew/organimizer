@@ -9,9 +9,10 @@
 //! 2. [`date_source`] – decide which date to use for each file
 //!    (filename / EXIF / modified / created, with an "Auto" priority order).
 //! 3. [`plan`]      – build a list of [`plan::PlanItem`]s by running each file
-//!    through an ordered list of [`plan::Stage`]s. Today that is a no-op
-//!    "rename" stage (placeholder for future Renamer-style rules) followed by
-//!    the "Month YYYY" destination-folder stage driven by a [`template`].
+//!    through an ordered list of [`plan::Stage`]s. First the
+//!    "rename" stage runs the ordered ReNamer-style rules from [`rename`]
+//!    (a no-op when no rule is enabled, exactly like v1), then the optional
+//!    "Month YYYY" destination-folder stage driven by a [`template`].
 //!    Collisions are resolved here (" (1)", " (2)", ...).
 //! 4. [`ops`]       – execute a plan (rename, or copy+delete across devices),
 //!    write an undo log, and undo the last run.

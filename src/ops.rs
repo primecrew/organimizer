@@ -719,6 +719,31 @@ mod tests {
     }
 
     #[test]
+    fn extension_detect_fixes_wrong_extension_and_undo_restores() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        // a PNG saved with a .jpg extension, and a real JPEG
+        let png = b"\x89PNG\r\n\x1a\n0000000000000000";
+        fs::write(r.join("shot.jpg"), png).unwrap();
+        fs::write(r.join("real.jpg"), b"\xff\xd8\xff\xe0rest").unwrap();
+        let rules = vec![RuleSpec::new(RuleKind::Extension(ExtensionRule::Detect))];
+        let plan = plan_with(r, &mod_opts(false), &rules);
+        assert_eq!(
+            names(&plan, r),
+            vec![("real.jpg".into(), "<Unchanged>".into()), ("shot.jpg".into(), "shot.png".into())]
+        );
+        let it = plan.items.iter().find(|i| i.final_name() == "shot.png").unwrap();
+        assert!(it.warnings.iter().any(|w| w.contains("Extension")), "{:?}", it.warnings);
+        let rep = execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert!(r.join("shot.png").exists() && !r.join("shot.jpg").exists());
+        let u = undo(rep.undo_log.as_ref().unwrap(), &mut |_, _| {});
+        assert!(u.errors.is_empty(), "{:?}", u.errors);
+        assert_eq!(fs::read(r.join("shot.jpg")).unwrap(), png.to_vec());
+        assert!(!r.join("shot.png").exists());
+    }
+
+    #[test]
     fn rename_in_place_when_already_sorted_and_unchanged_otherwise() {
         let d = tempfile::tempdir().unwrap();
         let r = d.path();

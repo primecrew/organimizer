@@ -414,19 +414,35 @@ sort_into_month_folders = {sort}
 ; [Rules] - rename rules, applied in order to the name WITHOUT extension,
 ; before the Month YYYY folder is chosen. No rules = names are kept.
 ; One line per rule:  ruleN = type | on/off | key=value | key=value ...
-; (values use %XX for | % " ; # [ ] and leading/trailing spaces)
-;   replace  find= with= regex=0/1 case=0/1 occ=all/first/last
-;   remove   mode=chars chars= case=0/1 | mode=first/last n= |
-;            mode=range from= to= (1-based) | mode=whitespace | mode=digits
-;   add      text= pos=
-;   number   start= step= pad= pos= sep= perfolder=0/1
-;   case     mode=lower/upper/title/sentence/invert
-;   clean    trim= spaces= us2sp= sp2us= dot2sp= illegal= repeats= (0/1)
-;   date     source=plan/filename/exif/modified/created fmt=%Y-%m-%d pos= sep=
-;   parent   pos= sep=
-;   extcase  mode=lower/upper
+; (values use %XX for | % " ; # [ ] and leading/trailing spaces). Rule names
+; follow den4b ReNamer. Booleans are 0/1. Missing keys use the defaults.
+;   insert    text= pos=                       (alias: add)
+;   delete    from=N | fromdelim=TEXT ; count=N | untildelim=TEXT | until=end
+;             rtl= keepdelim=
+;   remove    mode=text text= occ=all/first/last case= |
+;             mode=chars chars= case= | mode=first/last n= |
+;             mode=range from= to= (1-based) | mode=whitespace | mode=digits
+;   replace   find= with= regex= case= occ=all/first/last
+;   regex     same keys as replace (regex=1); with= may use $1, $2 ...
+;   rearrange split=DELIMS (several separated by %7C) bypos= pattern=$1 $-1 $0
+;   extension set=jpg (image/video extensions only) | mode=detect (by content)
+;   strip     english= digits= symbols= brackets= user=CHARS except= case=
+;   case      mode=lower/upper/title/sentence/invert
+;   serialize start= step= pad= pos= sep= perfolder= repeat= reset=
+;             system=decimal/abc/ABC/roman              (alias: number)
+;   randomize len= digits= lower= upper= user= unique= pos= seed=
+;   padding   zeropad=N unpad= len=N chars= left=
+;   clean     trim= spaces= us2sp= sp2us= dot2sp= illegal= repeats=
+;             brackets= normspaces= emoji= marks= capspace=
+;   translit  (no options: e->e, ss, Zh ... to plain Latin)
+;   reformatdate find=%d.%m.%Y%7C%Y%m%d to=%Y-%m-%d whole=
+;   date      source=plan/filename/exif/modified/created fmt=%Y-%m-%d pos= sep=
+;   parent    pos= sep=
+;   extcase   mode=lower/upper
 ; pos = prefix / suffix / at:N (after N chars) / end:N (N chars before the
-; end) / replace (whole name). The extension itself only changes with extcase.
+; end) / replace (whole name) / after:TEXT / before:TEXT.
+; The extension only changes with the extension / extcase rules, and only
+; ever to another image or video extension. Pascal Script is not supported.
 ; ---------------------------------------------------------------------------
 [Rules]
 {rules}
