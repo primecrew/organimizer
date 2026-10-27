@@ -55,6 +55,29 @@ pub fn parse_extensions(s: &str) -> Vec<String> {
     v
 }
 
+/// Short one-line description of a user-entered extension list for the main
+/// window, e.g. `"26 image & video types"` or
+/// `"3 image & video types, 2 ignored (not image/video)"`. Reports what
+/// [`parse_extensions`] will actually use (including the fallback to the
+/// defaults when nothing usable was entered).
+pub fn extension_summary(s: &str) -> String {
+    let used = parse_extensions(s).len();
+    let typed_ok = split_list(s).any(|e| is_media_extension(&e));
+    let rejected = rejected_extensions(s).len();
+    let types = if used == 1 { "type" } else { "types" };
+    if !typed_ok {
+        if rejected > 0 {
+            return format!("{used} default image & video {types} ({rejected} ignored: not image/video)");
+        }
+        return format!("{used} default image & video {types}");
+    }
+    if rejected > 0 {
+        format!("{used} image & video {types}, {rejected} ignored (not image/video)")
+    } else {
+        format!("{used} image & video {types}")
+    }
+}
+
 pub fn has_extension(path: &Path, exts: &[String]) -> bool {
     path.extension()
         .map(|e| {
@@ -170,6 +193,18 @@ mod tests {
         let r = scan(d.path(), true, &forged, &AtomicBool::new(false), &mut |_, _| {});
         let names: Vec<_> = r.files.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
         assert_eq!(names, vec!["a.jpg", "b.mp4"]);
+    }
+
+    #[test]
+    fn extension_summary_counts_effective_types() {
+        assert_eq!(parse_extensions(DEFAULT_EXTENSIONS).len(), 26);
+        assert_eq!(extension_summary(DEFAULT_EXTENSIONS), "26 image & video types");
+        assert_eq!(extension_summary("jpg"), "1 image & video type");
+        assert_eq!(extension_summary("jpg, .PNG; mp4, jpg"), "3 image & video types");
+        assert_eq!(extension_summary("jpg, txt, pdf"), "1 image & video type, 2 ignored (not image/video)");
+        // nothing usable -> the defaults are used, and the summary says so
+        assert_eq!(extension_summary(""), "26 default image & video types");
+        assert_eq!(extension_summary("txt, exe"), "26 default image & video types (2 ignored: not image/video)");
     }
 
     #[test]

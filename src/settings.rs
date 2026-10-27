@@ -63,10 +63,61 @@ impl Default for Settings {
     }
 }
 
+/// What loading a preset changes. Stored as `scope = both|rename|folder` in
+/// the `[Preset:Name]` section; a missing or unknown value means `both`
+/// (what every preset written before 2.0.2 did).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PresetScope {
+    /// Rule chain + all options (include_subfolders, extensions, date, folder).
+    #[default]
+    Both,
+    /// Only the rename rule chain.
+    RenameOnly,
+    /// Only the output/folder stage: Month YYYY on/off, template, date
+    /// source, ambiguous order, fallback, auto order.
+    FolderOnly,
+}
+
+impl PresetScope {
+    pub const ALL: [PresetScope; 3] = [PresetScope::Both, PresetScope::RenameOnly, PresetScope::FolderOnly];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            PresetScope::Both => "both",
+            PresetScope::RenameOnly => "rename",
+            PresetScope::FolderOnly => "folder",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<PresetScope> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "both" | "all" => Some(PresetScope::Both),
+            "rename" | "rename_only" | "rules" => Some(PresetScope::RenameOnly),
+            "folder" | "folder_only" | "output" => Some(PresetScope::FolderOnly),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PresetScope::Both => "Rules + folder options",
+            PresetScope::RenameOnly => "Rename rules only",
+            PresetScope::FolderOnly => "Folder / date options only",
+        }
+    }
+}
+
+/// Characters a preset name may not contain (they would break the
+/// `[Preset:Name]` section header or start an INI comment).
+pub const PRESET_NAME_FORBIDDEN: &[char] = &['[', ']', ';', '#'];
+pub const PRESET_NAME_MAX: usize = 64;
+
 /// A named, saved rule chain plus the options that shape a run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preset {
     pub name: String,
+    /// What loading this preset changes.
+    pub scope: PresetScope,
     pub include_subfolders: bool,
     pub extensions: String,
     pub date: DateConfig,
@@ -246,6 +297,7 @@ impl Settings {
             }
             let mut p = Settings::default().to_preset(&name);
             read_options(&|k: &str| map.get(k).cloned(), &mut p);
+            p.scope = map.get("scope").and_then(|v| PresetScope::from_key(v)).unwrap_or_default();
             p.rules = rules_from(Some(&map));
             s.presets.push(p);
         }
@@ -273,6 +325,7 @@ impl Settings {
     pub fn to_preset(&self, name: &str) -> Preset {
         Preset {
             name: clean_preset_name(name),
+            scope: PresetScope::Both,
             include_subfolders: self.include_subfolders,
             extensions: self.extensions.clone(),
             date: self.date.clone(),
@@ -282,28 +335,121 @@ impl Settings {
         }
     }
 
-    /// Load a preset's chain + options (folder, theme etc. are kept).
+    /// Load a preset (folder, theme etc. are kept). What is loaded depends
+    /// on the preset's [`PresetScope`]; `Both` loads the chain + all options.
     pub fn apply_preset(&mut self, p: &Preset) {
-        self.include_subfolders = p.include_subfolders;
-        self.extensions = p.extensions.clone();
-        self.date = p.date.clone();
-        self.folder_template = p.folder_template.clone();
-        self.sort_into_folders = p.sort_into_folders;
-        self.rules = p.rules.clone();
+        let rules = matches!(p.scope, PresetScope::Both | PresetScope::RenameOnly);
+        let folder = matches!(p.scope, PresetScope::Both | PresetScope::FolderOnly);
+        if p.scope == PresetScope::Both {
+            self.include_subfolders = p.include_subfolders;
+            self.extensions = p.extensions.clone();
+        }
+        if folder {
+            self.date = p.date.clone();
+            self.folder_template = p.folder_template.clone();
+            self.sort_into_folders = p.sort_into_folders;
+        }
+        if rules {
+            self.rules = p.rules.clone();
+        }
     }
 
     /// Save the current chain + options under `name` (replacing a preset
-    /// with the same name, case-insensitive). Returns false for an empty name.
+    /// with the same name, case-insensitive, and keeping its scope). Returns
+    /// false for an empty name.
     pub fn save_preset(&mut self, name: &str) -> bool {
-        let p = self.to_preset(name);
+        let mut p = self.to_preset(name);
         if p.name.is_empty() {
             return false;
         }
         match self.presets.iter_mut().find(|x| x.name.eq_ignore_ascii_case(&p.name)) {
-            Some(x) => *x = p,
+            Some(x) => {
+                p.scope = x.scope;
+                p.name = x.name.clone();
+                *x = p
+            }
             None => self.presets.push(p),
         }
         true
+    }
+
+    pub fn find_preset(&self, name: &str) -> Option<&Preset> {
+        self.presets.iter().find(|p| p.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Check a new preset name. `except` is the preset being renamed (its
+    /// own name, in any case, is allowed). Returns the trimmed name.
+    pub fn validate_preset_name(&self, name: &str, except: Option<&str>) -> Result<String, String> {
+        let n = name.trim();
+        if n.is_empty() {
+            return Err("Enter a name.".into());
+        }
+        if n.chars().any(|c| PRESET_NAME_FORBIDDEN.contains(&c) || c.is_control()) {
+            return Err("Names cannot contain [ ] ; # or line breaks.".into());
+        }
+        if n.chars().count() > PRESET_NAME_MAX {
+            return Err(format!("Use at most {PRESET_NAME_MAX} characters."));
+        }
+        let taken = self
+            .presets
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(n) && !except.is_some_and(|e| p.name.eq_ignore_ascii_case(e)));
+        if taken {
+            return Err(format!("A preset named “{n}” already exists."));
+        }
+        Ok(n.to_string())
+    }
+
+    /// Rename a preset after validating the new name.
+    pub fn rename_preset(&mut self, old: &str, new: &str) -> Result<String, String> {
+        let n = self.validate_preset_name(new, Some(old))?;
+        let p = self.presets.iter_mut().find(|p| p.name.eq_ignore_ascii_case(old)).ok_or("No such preset.")?;
+        p.name = n.clone();
+        Ok(n)
+    }
+
+    /// Copy a preset as "Name copy" (or "Name copy 2", ...), inserted right
+    /// after the original. Returns the new name.
+    pub fn duplicate_preset(&mut self, name: &str) -> Option<String> {
+        let i = self.presets.iter().position(|p| p.name.eq_ignore_ascii_case(name))?;
+        let base: String = self.presets[i].name.chars().take(PRESET_NAME_MAX - 8).collect();
+        let free = |n: &str| !self.presets.iter().any(|p| p.name.eq_ignore_ascii_case(n));
+        let mut new = format!("{base} copy");
+        let mut k = 2;
+        while !free(&new) {
+            new = format!("{base} copy {k}");
+            k += 1;
+        }
+        let mut copy = self.presets[i].clone();
+        copy.name = new.clone();
+        self.presets.insert(i + 1, copy);
+        Some(new)
+    }
+
+    /// "Save changes": overwrite an existing preset with the current working
+    /// state, keeping its name, position and scope.
+    pub fn update_preset(&mut self, name: &str) -> bool {
+        let snap = self.to_preset(name);
+        match self.presets.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name)) {
+            Some(p) => {
+                let (n, scope) = (p.name.clone(), p.scope);
+                *p = snap;
+                p.name = n;
+                p.scope = scope;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_preset_scope(&mut self, name: &str, scope: PresetScope) -> bool {
+        match self.presets.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name)) {
+            Some(p) => {
+                p.scope = scope;
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn delete_preset(&mut self, name: &str) -> bool {
@@ -468,6 +614,9 @@ height = {h}
 ; rule chain (ruleN keys as in [Rules]) plus the options include_subfolders,
 ; extensions, source, auto_order, ambiguous_order, fallback, folder_template
 ; and sort_into_month_folders (same meaning as above).
+; scope = what loading the preset changes. Allowed: both (rules + all
+; options) / rename (rule chain only) / folder (Month YYYY on/off, template,
+; date source, auto_order, ambiguous_order, fallback). Default: both
 ; ---------------------------------------------------------------------------
 {presets}"#,
             last_folder = one(&self.last_folder),
@@ -509,8 +658,9 @@ fn preset_ini(p: &Preset) -> String {
         DateOrder::Intl => "intl",
     };
     format!(
-        "\n[Preset:{name}]\n; options\ninclude_subfolders = {inc}\nextensions = {ext}\nsource = {src}\nauto_order = {ord}\nambiguous_order = {amb}\nfallback = {fb}\nfolder_template = {tpl}\nsort_into_month_folders = {sort}\n; rules ({n})\n{rules}",
+        "\n[Preset:{name}]\n; what loading this preset changes: both / rename / folder\nscope = {scope}\n; options\ninclude_subfolders = {inc}\nextensions = {ext}\nsource = {src}\nauto_order = {ord}\nambiguous_order = {amb}\nfallback = {fb}\nfolder_template = {tpl}\nsort_into_month_folders = {sort}\n; rules ({n})\n{rules}",
         name = p.name,
+        scope = p.scope.key(),
         inc = p.include_subfolders,
         ext = one(&p.extensions),
         src = p.date.mode.key(),
@@ -575,9 +725,15 @@ pub fn load_or_create(path: Option<PathBuf>) -> Loaded {
     }
 }
 
+/// Write the INI safely: the new text goes to `PhotoSorter.ini.tmp` first,
+/// the previous file is kept as `PhotoSorter.ini.bak`, then the temp file
+/// replaces the INI (an atomic rename on the same volume).
 pub fn save(path: &Path, s: &Settings) -> std::io::Result<()> {
     let tmp = path.with_extension("ini.tmp");
     std::fs::write(&tmp, s.to_ini())?;
+    if path.is_file() {
+        let _ = std::fs::copy(path, path.with_extension("ini.bak"));
+    }
     std::fs::rename(&tmp, path).or_else(|_| {
         // rename over an existing file can fail on some setups; fall back
         let r = std::fs::write(path, s.to_ini());
@@ -766,5 +922,142 @@ mod tests {
             }
             assert!(lines[i - 1].trim().starts_with(';'), "uncommented rule line: {t}");
         }
+    }
+
+    #[test]
+    fn options_extension_edit_persists_and_applies_to_scan() {
+        // What Tools > Options > Save does: change the list, write the INI,
+        // and on the next start the edited list is what the scan uses.
+        let d = tempfile::tempdir().unwrap();
+        let ini = d.path().join(INI_NAME);
+        let first = load_or_create(Some(ini.clone()));
+        assert_eq!(first.settings.extensions, DEFAULT_EXTENSIONS);
+        let mut s = first.settings;
+        s.extensions = "jpg, mp4, txt".into(); // txt typed by the user: ignored
+        save(&ini, &s).unwrap();
+        let text = std::fs::read_to_string(&ini).unwrap();
+        assert!(text.contains("extensions = jpg, mp4, txt"), "{text}");
+
+        let again = load_or_create(Some(ini.clone())).settings;
+        assert_eq!(again.extensions, "jpg, mp4, txt");
+        let exts = crate::scan::parse_extensions(&again.extensions);
+        assert_eq!(exts, vec!["jpg", "mp4"]);
+        let pics = d.path().join("pics");
+        std::fs::create_dir(&pics).unwrap();
+        for f in ["a.jpg", "b.png", "c.mp4", "d.txt"] {
+            std::fs::write(pics.join(f), b"x").unwrap();
+        }
+        let r = crate::scan::scan(&pics, false, &exts, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| {});
+        let mut names: Vec<_> = r.files.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, vec!["a.jpg", "c.mp4"]);
+
+        // "Reset to defaults" = the default list, which round-trips unchanged
+        s.extensions = DEFAULT_EXTENSIONS.to_string();
+        save(&ini, &s).unwrap();
+        assert_eq!(load_or_create(Some(ini)).settings.extensions, DEFAULT_EXTENSIONS);
+    }
+
+    #[test]
+    fn preset_duplicate_rename_delete_and_uniqueness() {
+        let mut s = Settings::default();
+        s.rules = sample_rules();
+        assert!(s.save_preset("Trip"));
+        assert_eq!(s.duplicate_preset("trip").as_deref(), Some("Trip copy"));
+        assert_eq!(s.duplicate_preset("Trip").as_deref(), Some("Trip copy 2"));
+        assert_eq!(s.duplicate_preset("Trip copy").as_deref(), Some("Trip copy copy"));
+        assert_eq!(s.duplicate_preset("missing"), None);
+        let names: Vec<&str> = s.presets.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Trip", "Trip copy 2", "Trip copy", "Trip copy copy"]);
+        assert_eq!(s.presets[1].rules, s.presets[0].rules);
+
+        // rename validation
+        assert!(s.rename_preset("Trip copy", "  ").is_err());
+        for bad in ["a]b", "[x", "a;b", "a#b", "two\nlines", "tab\there"] {
+            assert!(s.rename_preset("Trip copy", bad).is_err(), "{bad:?}");
+        }
+        assert!(s.rename_preset("Trip copy", &"x".repeat(PRESET_NAME_MAX + 1)).is_err());
+        assert!(s.rename_preset("Trip copy", "TRIP").is_err()); // taken (case-insensitive)
+        assert_eq!(s.rename_preset("Trip copy", "TRIP COPY").as_deref(), Ok("TRIP COPY")); // own name, new case
+        assert_eq!(s.rename_preset("trip copy", "  Rome 2024 ").as_deref(), Ok("Rome 2024"));
+        assert!(s.rename_preset("nope", "x").is_err());
+        assert!(s.validate_preset_name("Rome 2024", None).is_err());
+        assert!(s.validate_preset_name("Rome 2024", Some("rome 2024")).is_ok());
+
+        // update keeps name, position and scope
+        s.set_preset_scope("Rome 2024", PresetScope::RenameOnly);
+        s.rules.clear();
+        s.sort_into_folders = false;
+        assert!(s.update_preset("rome 2024"));
+        let p = s.find_preset("Rome 2024").unwrap();
+        assert_eq!(
+            (p.name.as_str(), p.scope, p.rules.len(), p.sort_into_folders),
+            ("Rome 2024", PresetScope::RenameOnly, 0, false)
+        );
+        assert_eq!(s.presets[2].name, "Rome 2024");
+        // overwrite via "Save as" keeps the existing scope too
+        assert!(s.save_preset("ROME 2024"));
+        assert_eq!(s.find_preset("Rome 2024").unwrap().scope, PresetScope::RenameOnly);
+        assert_eq!(s.presets.len(), 4);
+
+        assert!(s.delete_preset("rome 2024"));
+        assert!(!s.delete_preset("rome 2024"));
+        assert_eq!(s.presets.len(), 3);
+    }
+
+    #[test]
+    fn preset_scope_roundtrip_apply_and_old_inis() {
+        let mut s = Settings::default();
+        s.rules = sample_rules();
+        s.sort_into_folders = false;
+        s.folder_template = "{YYYY}".into();
+        s.save_preset("Both");
+        s.save_preset("R");
+        s.save_preset("F");
+        s.set_preset_scope("R", PresetScope::RenameOnly);
+        s.set_preset_scope("F", PresetScope::FolderOnly);
+        let text = s.to_ini();
+        assert!(text.contains("scope = rename") && text.contains("scope = folder"), "{text}");
+        let back = Settings::from_ini(&text);
+        assert_eq!(back, s);
+
+        // rename-only loads rules only, folder-only loads folder options only
+        let mut t = Settings::default();
+        t.apply_preset(back.find_preset("R").unwrap());
+        assert_eq!(t.rules, sample_rules());
+        assert!(t.sort_into_folders);
+        assert_eq!(t.folder_template, Settings::default().folder_template);
+        let mut t = Settings::default();
+        t.apply_preset(back.find_preset("F").unwrap());
+        assert!(t.rules.is_empty());
+        assert!(!t.sort_into_folders);
+        assert_eq!(t.folder_template, "{YYYY}");
+
+        // a 2.0 / 2.0.1 preset (no scope key) or an unknown value = both
+        let old = "[Preset:Old]\nsort_into_month_folders = no\nrule1 = case | on | mode=upper\n[Preset:Odd]\nscope = sideways\n";
+        let o = Settings::from_ini(old);
+        assert_eq!(o.presets[0].scope, PresetScope::Both);
+        assert_eq!(o.presets[1].scope, PresetScope::Both);
+        let mut t = Settings::default();
+        t.apply_preset(&o.presets[0]);
+        assert!(!t.sort_into_folders);
+        assert_eq!(t.rules.len(), 1);
+    }
+
+    #[test]
+    fn save_is_atomic_and_keeps_a_backup() {
+        let d = tempfile::tempdir().unwrap();
+        let ini = d.path().join(INI_NAME);
+        let mut s = Settings::default();
+        save(&ini, &s).unwrap();
+        assert!(!d.path().join("PhotoSorter.ini.bak").exists()); // nothing to back up yet
+        let first = std::fs::read_to_string(&ini).unwrap();
+        s.save_preset("New one");
+        save(&ini, &s).unwrap();
+        assert_eq!(std::fs::read_to_string(d.path().join("PhotoSorter.ini.bak")).unwrap(), first);
+        assert!(!d.path().join("PhotoSorter.ini.tmp").exists());
+        let now = std::fs::read_to_string(&ini).unwrap();
+        assert!(now.starts_with("; ====") && now.contains("[Preset:New one]"));
+        assert_eq!(Settings::from_ini(&now), s);
     }
 }

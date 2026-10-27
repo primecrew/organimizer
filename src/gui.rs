@@ -4,6 +4,13 @@
 //! Layout: one window, top to bottom in the order the pipeline runs:
 //! 1. Source & filter  2. Rename rules  3. Output folder (Month YYYY)
 //! 4. Live preview table  5. Apply / Undo bar.
+//!
+//! Rarely-changed settings (file types, Auto date priority) live in the
+//! Tools > Options window; the main window only shows a one-line summary.
+//!
+//! Menu bar: File (New Project, Open Folder, Undo Last Apply, Exit),
+//! Presets (Load, Save current, Manage Presets), Tools (Options, open the
+//! settings / undo-log folder), Help (README, About).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,8 +35,9 @@ use photo_sorter::rename::{
     RearrangeRule, ReformatDateRule, RemoveMode, ReplaceRule, RuleKind, RuleSpec, StripRule,
 };
 use photo_sorter::scan;
-use photo_sorter::settings::{self, Loaded, Settings, Theme};
+use photo_sorter::settings::{self, Loaded, PresetScope, Settings, Theme};
 use photo_sorter::template::format_folder_name;
+use photo_sorter::{desktop, session};
 
 // ---------------------------------------------------------------------------
 // Background work
@@ -178,6 +186,24 @@ enum Confirm {
     Undo { log: PathBuf, moves: usize, started: String },
 }
 
+/// Unsaved edits in the Tools > Options window. Applied to the settings (and
+/// written to PhotoSorter.ini) only on Save; Close discards them.
+#[derive(Clone, PartialEq)]
+struct OptionsDraft {
+    extensions: String,
+    order_ui: Vec<(SourceKind, bool)>,
+}
+
+/// Small modal dialogs of the menu bar.
+enum Dialog {
+    NewProject(Vec<String>),
+    SavePreset { name: String },
+    DeletePreset(String),
+    ReadmeMissing(PathBuf),
+    About,
+    Message { title: String, text: String },
+}
+
 enum RuleAction {
     Up,
     Down,
@@ -238,6 +264,15 @@ pub struct App {
     preset_name: String,
 
     confirm: Option<Confirm>,
+    options: Option<OptionsDraft>,
+    dialog: Option<Dialog>,
+    /// Presets > Manage Presets window.
+    manage_open: bool,
+    manage_sel: String,
+    manage_rename: String,
+    manage_error: Option<String>,
+    /// Preset loaded via "Edit" in Manage Presets; "Save changes" writes back to it.
+    editing_preset: Option<String>,
     undo_cache: (String, Option<PathBuf>),
     applied_theme: Option<Theme>,
     applied_font: f32,
@@ -293,6 +328,13 @@ impl App {
             preset_sel: String::new(),
             preset_name: String::new(),
             confirm: None,
+            options: None,
+            dialog: None,
+            manage_open: false,
+            manage_sel: String::new(),
+            manage_rename: String::new(),
+            manage_error: None,
+            editing_preset: None,
             undo_cache: (String::from("\0"), None),
             applied_theme: None,
             applied_font: 0.0,
@@ -1347,6 +1389,8 @@ impl eframe::App for App {
         }
         let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
 
+        self.shortcuts(&ctx);
+        self.menu_bar(ui);
         self.top_bar(ui);
         self.status_bar(ui);
         self.action_bar(ui, &ctx);
@@ -1370,6 +1414,9 @@ impl eframe::App for App {
         }
 
         self.confirm_dialogs(&ctx);
+        self.options_window(&ctx);
+        self.manage_presets_window(&ctx);
+        self.dialogs(&ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1423,6 +1470,281 @@ fn step_section(
 }
 
 impl App {
+    fn open_options(&mut self) {
+        self.options = Some(OptionsDraft { extensions: self.s.extensions.clone(), order_ui: self.order_ui.clone() });
+    }
+
+    fn locked(&self) -> bool {
+        matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo))
+    }
+
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        if self.confirm.is_some() || self.dialog.is_some() || self.options.is_some() {
+            return;
+        }
+        let ctrl_n = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::N);
+        let ctrl_o = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::O);
+        let (n, o, f1) = ctx.input_mut(|i| {
+            (
+                i.consume_shortcut(&ctrl_n),
+                i.consume_shortcut(&ctrl_o),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::F1),
+            )
+        });
+        if f1 {
+            self.open_help();
+        }
+        if self.locked() {
+            return;
+        }
+        if n {
+            self.request_new_project();
+        } else if o {
+            self.browse_folder();
+        }
+    }
+
+    fn menu_bar(&mut self, ui: &mut egui::Ui) {
+        let locked = self.locked();
+        egui::Panel::top("menu").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui
+                        .add_enabled(!locked, egui::Button::new("New Project").shortcut_text("Ctrl+N"))
+                        .on_hover_text("Clear the folder, preview and rules; no files are touched")
+                        .clicked()
+                    {
+                        ui.close();
+                        self.request_new_project();
+                    }
+                    if ui.add_enabled(!locked, egui::Button::new("Open Folder…").shortcut_text("Ctrl+O")).clicked() {
+                        ui.close();
+                        self.browse_folder();
+                    }
+                    ui.separator();
+                    let log = self.undo_log_for_root();
+                    if ui
+                        .add_enabled(!locked && log.is_some(), egui::Button::new("Undo Last Apply…"))
+                        .on_disabled_hover_text("No undo log (PhotoSorter-undo-*.json) in the chosen folder")
+                        .clicked()
+                        && let Some(p) = log
+                    {
+                        ui.close();
+                        self.request_undo(p);
+                    }
+                    ui.separator();
+                    if ui
+                        .add_enabled(!locked, egui::Button::new("Exit"))
+                        .on_disabled_hover_text("Wait until Apply / Undo has finished")
+                        .clicked()
+                    {
+                        ui.close();
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+                ui.menu_button("Presets", |ui| {
+                    ui.add_enabled_ui(!locked, |ui| {
+                        ui.menu_button("Load", |ui| {
+                            if self.s.presets.is_empty() {
+                                ui.label(RichText::new("No presets saved yet").weak());
+                            }
+                            let names: Vec<(String, PresetScope)> =
+                                self.s.presets.iter().map(|p| (p.name.clone(), p.scope)).collect();
+                            for (name, scope) in names {
+                                if ui.button(&name).on_hover_text(format!("Loads: {}", scope.label())).clicked() {
+                                    ui.close();
+                                    self.load_preset(&name);
+                                }
+                            }
+                        });
+                        if ui.button("Save current as preset…").clicked() {
+                            ui.close();
+                            self.dialog =
+                                Some(Dialog::SavePreset { name: self.editing_preset.clone().unwrap_or_default() });
+                        }
+                        if let Some(n) = self.editing_preset.clone()
+                            && ui.button(format!("Save changes to “{n}”")).clicked()
+                        {
+                            ui.close();
+                            self.save_editing_preset();
+                        }
+                        ui.separator();
+                        if ui.button("Manage Presets…").clicked() {
+                            ui.close();
+                            self.open_manage(None);
+                        }
+                    });
+                });
+                ui.menu_button("Tools", |ui| {
+                    if ui.button("Options…").on_hover_text("File types and date-detection priority").clicked() {
+                        self.open_options();
+                        ui.close();
+                    }
+                    ui.separator();
+                    let settings_dir = self.ini_path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
+                    if ui
+                        .add_enabled(settings_dir.is_some(), egui::Button::new("Open Settings Folder"))
+                        .on_hover_text("The folder with PhotoSorter.exe and PhotoSorter.ini")
+                        .clicked()
+                        && let Some(d) = settings_dir
+                    {
+                        ui.close();
+                        self.open_folder(&d);
+                    }
+                    let log_dir = self.undo_log_for_root().and_then(|p| p.parent().map(Path::to_path_buf));
+                    if ui
+                        .add_enabled(log_dir.is_some(), egui::Button::new("Open Undo Log Folder"))
+                        .on_disabled_hover_text("No undo log in the chosen folder")
+                        .clicked()
+                        && let Some(d) = log_dir
+                    {
+                        ui.close();
+                        self.open_folder(&d);
+                    }
+                });
+                ui.menu_button("Help", |ui| {
+                    if ui.add(egui::Button::new("Help").shortcut_text("F1")).on_hover_text("Open README.txt").clicked()
+                    {
+                        ui.close();
+                        self.open_help();
+                    }
+                    if ui.button("About PhotoSorter…").clicked() {
+                        ui.close();
+                        self.dialog = Some(Dialog::About);
+                    }
+                });
+            });
+        });
+    }
+
+    fn browse_folder(&mut self) {
+        let mut dlg = rfd::FileDialog::new().set_title("Choose a folder with photos / videos");
+        let cur = self.root();
+        if cur.is_dir() {
+            dlg = dlg.set_directory(&cur);
+        }
+        if let Some(p) = dlg.pick_folder() {
+            self.set_folder(&p);
+        }
+    }
+
+    fn request_undo(&mut self, p: PathBuf) {
+        match ops::read_log(&p) {
+            Ok(l) => self.confirm = Some(Confirm::Undo { moves: l.moves.len(), started: l.started, log: p }),
+            Err(e) => self.status = format!("Cannot read undo log: {e}"),
+        }
+    }
+
+    fn open_folder(&mut self, d: &Path) {
+        if let Err(e) = desktop::open_folder(d) {
+            self.dialog = Some(Dialog::Message { title: "Cannot open folder".into(), text: e.to_string() });
+        }
+    }
+
+    fn open_help(&mut self) {
+        let Some(dir) = settings::exe_dir() else {
+            self.dialog = Some(Dialog::ReadmeMissing(PathBuf::from(desktop::README_NAME)));
+            return;
+        };
+        match desktop::find_readme(&dir) {
+            Ok(p) => match desktop::open_text_file(&p) {
+                Ok(()) => self.status = format!("Opened {}", p.display()),
+                Err(e) => {
+                    self.dialog = Some(Dialog::Message {
+                        title: "Cannot open README.txt".into(),
+                        text: format!("{}: {e}", p.display()),
+                    })
+                }
+            },
+            Err(p) => self.dialog = Some(Dialog::ReadmeMissing(p)),
+        }
+    }
+
+    fn request_new_project(&mut self) {
+        if self.locked() {
+            return;
+        }
+        let pending = if self.plan.is_some() { self.counts.to_move } else { 0 };
+        let log = self.undo_log_for_root();
+        let w = session::new_project_warnings(pending, log.as_deref(), session::rules_unsaved(&self.s));
+        if w.is_empty() {
+            self.do_new_project();
+        } else {
+            self.dialog = Some(Dialog::NewProject(w));
+        }
+    }
+
+    /// Reset the in-memory session. Never touches files, folders or undo logs.
+    fn do_new_project(&mut self) {
+        if self.locked() {
+            return;
+        }
+        if let Some(w) = self.worker.take() {
+            w.cancel.store(true, Ordering::Relaxed); // a running preview only
+        }
+        self.s = session::new_project(&self.s);
+        self.rebuild_order_ui();
+        self.plan = None;
+        self.counts = Default::default();
+        self.folder_rows.clear();
+        self.source_summary.clear();
+        self.plan_sig.clear();
+        self.plan_cancelled = false;
+        self.scan_cache = None;
+        self.scan_errors.clear();
+        self.dirs_scanned = 0;
+        self.changed_at = None;
+        self.auto_paused = false;
+        self.rule_errors.clear();
+        self.progress_text.clear();
+        self.progress = 0.0;
+        self.run_report = None;
+        self.undo_report = None;
+        self.tab = Tab::Files;
+        self.filter_text.clear();
+        self.filter_status = StatusFilter::All;
+        self.view.clear();
+        self.view_dirty = true;
+        self.open_rule = None;
+        self.preset_sel.clear();
+        self.preset_name.clear();
+        self.editing_preset = None;
+        self.invalidate_undo_cache();
+        self.status = "New project — choose a folder. No files were changed.".into();
+    }
+
+    fn load_preset(&mut self, name: &str) {
+        if let Some(p) = self.s.find_preset(name).cloned() {
+            self.s.apply_preset(&p);
+            self.rebuild_order_ui();
+            self.open_rule = None;
+            self.preset_sel = p.name.clone();
+            self.status = format!("Loaded preset “{}” ({}).", p.name, p.scope.label().to_lowercase());
+        }
+    }
+
+    fn save_editing_preset(&mut self) {
+        if let Some(n) = self.editing_preset.clone() {
+            if self.s.update_preset(&n) {
+                self.save_settings();
+                self.status = format!("Saved changes to preset “{n}”.");
+            } else {
+                self.editing_preset = None;
+            }
+        }
+    }
+
+    fn open_manage(&mut self, sel: Option<String>) {
+        self.manage_open = true;
+        let sel = sel
+            .or_else(|| self.editing_preset.clone())
+            .or_else(|| self.s.presets.first().map(|p| p.name.clone()))
+            .unwrap_or_default();
+        self.manage_rename = sel.clone();
+        self.manage_sel = sel;
+        self.manage_error = None;
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("top").show(ui, |ui| {
             ui.add_space(6.0);
@@ -1537,12 +1859,7 @@ impl App {
                 if r.clicked()
                     && let Some(p) = log
                 {
-                    match ops::read_log(&p) {
-                        Ok(l) => {
-                            self.confirm = Some(Confirm::Undo { moves: l.moves.len(), started: l.started, log: p })
-                        }
-                        Err(e) => self.status = format!("Cannot read undo log: {e}"),
-                    }
+                    self.request_undo(p);
                 }
                 if kind == Some(JobKind::Preview) {
                     if ui.button("⏹ Stop preview").clicked()
@@ -1604,15 +1921,8 @@ impl App {
         let mut open = self.open_source;
         step_section(ui, "1", "Source & filter", &summary, &mut open, |ui| {
             ui.horizontal(|ui| {
-                if ui.button("📂 Browse…").clicked() {
-                    let mut dlg = rfd::FileDialog::new().set_title("Choose a folder with photos / videos");
-                    let cur = self.root();
-                    if cur.is_dir() {
-                        dlg = dlg.set_directory(&cur);
-                    }
-                    if let Some(p) = dlg.pick_folder() {
-                        self.set_folder(&p);
-                    }
+                if ui.button("📂 Browse…").on_hover_text("File > Open Folder… (Ctrl+O)").clicked() {
+                    self.browse_folder();
                 }
                 ui.add(
                     egui::TextEdit::singleline(&mut self.s.last_folder)
@@ -1626,18 +1936,17 @@ impl App {
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.s.include_subfolders, "Include subfolders")
                     .on_hover_text("Every folder containing photos/videos gets its own Month YYYY subfolders.");
-                ui.label("Extensions");
-                ui.add(egui::TextEdit::singleline(&mut self.s.extensions).desired_width(f32::INFINITY))
-                    .on_hover_text("Comma-separated, case-insensitive. Only image, RAW and video types are accepted.");
+                ui.separator();
+                let summary = scan::extension_summary(&self.s.extensions);
+                let warn = !scan::rejected_extensions(&self.s.extensions).is_empty();
+                let text = RichText::new(format!("File types: {summary} (change in Tools > Options)")).weak();
+                let text = if warn { text.color(amber()) } else { text };
+                ui.add(egui::Label::new(text).truncate())
+                    .on_hover_text(scan::parse_extensions(&self.s.extensions).join(", "));
+                if ui.small_button("Options…").on_hover_text("Edit the file types (Tools > Options)").clicked() {
+                    self.open_options();
+                }
             });
-            let rejected = scan::rejected_extensions(&self.s.extensions);
-            if !rejected.is_empty() {
-                ui.label(
-                    RichText::new(format!("Ignored (not image/video, never touched): {}", rejected.join(", ")))
-                        .color(amber())
-                        .small(),
-                );
-            }
         });
         self.open_source = open;
     }
@@ -1799,6 +2108,22 @@ impl App {
     }
 
     fn presets_row(&mut self, ui: &mut egui::Ui) {
+        if let Some(n) = self.editing_preset.clone() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(format!("✏ Editing preset “{n}”")).strong().color(accent(ui)));
+                ui.label(RichText::new("change the rules / options, then").weak());
+                if ui
+                    .button("💾 Save changes")
+                    .on_hover_text("Write the current rules + options back to this preset")
+                    .clicked()
+                {
+                    self.save_editing_preset();
+                }
+                if ui.button("Stop editing").clicked() {
+                    self.editing_preset = None;
+                }
+            });
+        }
         ui.horizontal_wrapped(|ui| {
             ui.label("Preset");
             let sel_text = if self.preset_sel.is_empty() { "(choose)".to_string() } else { self.preset_sel.clone() };
@@ -1811,20 +2136,16 @@ impl App {
                 }
             });
             let exists = self.s.presets.iter().any(|p| p.name == self.preset_sel);
-            if ui.add_enabled(exists, egui::Button::new("Load")).on_hover_text("Load rules + options").clicked()
-                && let Some(p) = self.s.presets.iter().find(|p| p.name == self.preset_sel).cloned()
-            {
-                self.s.apply_preset(&p);
-                self.rebuild_order_ui();
-                self.open_rule = None;
-                self.status = format!("Loaded preset “{}”.", p.name);
+            if ui.add_enabled(exists, egui::Button::new("Load")).on_hover_text("Load rules + options").clicked() {
+                let name = self.preset_sel.clone();
+                self.load_preset(&name);
             }
             if ui.add_enabled(exists, egui::Button::new("Delete")).clicked() {
-                let name = self.preset_sel.clone();
-                self.s.delete_preset(&name);
-                self.preset_sel.clear();
-                self.save_settings();
-                self.status = format!("Deleted preset “{name}”.");
+                self.dialog = Some(Dialog::DeletePreset(self.preset_sel.clone()));
+            }
+            if ui.button("Manage…").on_hover_text("Presets > Manage Presets…").clicked() {
+                let sel = exists.then(|| self.preset_sel.clone());
+                self.open_manage(sel);
             }
             ui.separator();
             ui.add(egui::TextEdit::singleline(&mut self.preset_name).hint_text("new preset name").desired_width(150.0));
@@ -1898,44 +2219,18 @@ impl App {
                 });
             });
             if self.s.date.mode == DateMode::Auto {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new("Auto priority (first match wins; also used by “Insert date”):").weak());
-                    let mut changed = false;
-                    let mut swap: Option<(usize, usize)> = None;
-                    let n = self.order_ui.len();
-                    let enabled_count = self.order_ui.iter().filter(|(_, on)| *on).count();
-                    for i in 0..n {
-                        let (kind, on) = self.order_ui[i];
-                        egui::Frame::new()
-                            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                            .corner_radius(CornerRadius::same(6))
-                            .inner_margin(Margin::symmetric(4, 0))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    if ui.add_enabled(i > 0, egui::Button::new("⏴").small()).clicked() {
-                                        swap = Some((i, i - 1));
-                                    }
-                                    let mut on2 = on;
-                                    let can_toggle = !(on && enabled_count == 1);
-                                    if ui
-                                        .add_enabled(can_toggle, egui::Checkbox::new(&mut on2, kind_desc(kind)))
-                                        .changed()
-                                    {
-                                        self.order_ui[i].1 = on2;
-                                        changed = true;
-                                    }
-                                    if ui.add_enabled(i + 1 < n, egui::Button::new("⏵").small()).clicked() {
-                                        swap = Some((i, i + 1));
-                                    }
-                                });
-                            });
-                    }
-                    if let Some((a, b)) = swap {
-                        self.order_ui.swap(a, b);
-                        changed = true;
-                    }
-                    if changed {
-                        self.sync_order();
+                ui.horizontal(|ui| {
+                    let order = order_summary(&self.order_ui);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("Auto priority: {order}  (change in Tools > Options)")).weak(),
+                        )
+                        .truncate(),
+                    )
+                    .on_hover_text("First match wins; also used by “Insert date”.");
+                    if ui.small_button("Options…").on_hover_text("Edit the Auto priority (Tools > Options)").clicked()
+                    {
+                        self.open_options();
                     }
                 });
             }
@@ -2340,6 +2635,454 @@ impl App {
             self.confirm = None;
         }
     }
+}
+
+impl App {
+    /// Tools > Options: grouped sections, Save (apply + write PhotoSorter.ini)
+    /// or Close (discard). Modal, so the main window cannot change underneath.
+    fn options_window(&mut self, ctx: &egui::Context) {
+        let Some(mut draft) = self.options.take() else { return };
+        let locked = matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo));
+        let current = OptionsDraft { extensions: self.s.extensions.clone(), order_ui: self.order_ui.clone() };
+        let mut save = false;
+        let mut close = false;
+        let fs = self.s.font_size;
+        let modal = egui::Modal::new(egui::Id::unique("photosorter-options")).show(ctx, |ui| {
+            ui.set_width((fs * 40.0).min(ctx.content_rect().width() - 60.0));
+            ui.heading("Options");
+            ui.add_space(6.0);
+
+            options_group(ui, "File types", |ui| {
+                ui.label(
+                    "Extensions to process, separated by commas (case-insensitive). Only image, camera RAW and \
+                     video types are accepted; anything else is ignored and never touched.",
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut draft.extensions)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("e.g. jpg, png, heic, mp4"),
+                );
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(draft.extensions != scan::DEFAULT_EXTENSIONS, egui::Button::new("Reset to defaults"))
+                        .on_hover_text(scan::DEFAULT_EXTENSIONS)
+                        .clicked()
+                    {
+                        draft.extensions = scan::DEFAULT_EXTENSIONS.to_string();
+                    }
+                    ui.label(RichText::new(format!("Uses: {}", scan::extension_summary(&draft.extensions))).weak());
+                });
+                let rejected = scan::rejected_extensions(&draft.extensions);
+                if !rejected.is_empty() {
+                    ui.label(
+                        RichText::new(format!("Ignored (not image/video, never touched): {}", rejected.join(", ")))
+                            .color(amber())
+                            .small(),
+                    );
+                }
+            });
+            ui.add_space(6.0);
+
+            options_group(ui, "Date detection", |ui| {
+                ui.label("Auto priority — used when Date source is “Auto”, and by the “Insert date” rule. First match wins; untick to skip a source.");
+                let n = draft.order_ui.len();
+                let enabled_count = draft.order_ui.iter().filter(|(_, on)| *on).count();
+                let mut swap: Option<(usize, usize)> = None;
+                for i in 0..n {
+                    let (kind, on) = draft.order_ui[i];
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("{}.", i + 1)).weak());
+                        if ui.add_enabled(i > 0, egui::Button::new("⏶").small()).on_hover_text("Earlier").clicked() {
+                            swap = Some((i, i - 1));
+                        }
+                        if ui.add_enabled(i + 1 < n, egui::Button::new("⏷").small()).on_hover_text("Later").clicked() {
+                            swap = Some((i, i + 1));
+                        }
+                        let mut on2 = on;
+                        let can_toggle = !(on && enabled_count == 1);
+                        if ui.add_enabled(can_toggle, egui::Checkbox::new(&mut on2, kind_desc(kind))).changed() {
+                            draft.order_ui[i].1 = on2;
+                        }
+                    });
+                }
+                if let Some((a, b)) = swap {
+                    draft.order_ui.swap(a, b);
+                }
+            });
+
+            ui.add_space(10.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let dirty = draft != current;
+                let btn = egui::Button::new(RichText::new("Save").strong().color(Color32::WHITE)).fill(green());
+                let r = ui.add_enabled(dirty && !locked, btn).on_hover_text(format!("Apply and save to {}", settings::INI_NAME));
+                let r = if locked { r.on_disabled_hover_text("Wait until Apply / Undo has finished") } else { r };
+                if r.clicked() {
+                    save = true;
+                }
+                let close_label = if dirty { "Close without saving" } else { "Close" };
+                if ui.button(close_label).clicked() {
+                    close = true;
+                }
+                if dirty {
+                    ui.label(RichText::new("Unsaved changes").color(amber()).small());
+                }
+            });
+        });
+        if save {
+            self.s.extensions = draft.extensions.trim().to_string();
+            self.order_ui = draft.order_ui;
+            self.sync_order();
+            self.save_settings();
+            self.status = format!("Options saved to {}.", settings::INI_NAME);
+            return;
+        }
+        if close || modal.should_close() {
+            return;
+        }
+        self.options = Some(draft);
+    }
+}
+
+impl App {
+    /// Presets > Manage Presets: list on the left, details + actions on the
+    /// right. Every change is written to PhotoSorter.ini at once.
+    fn manage_presets_window(&mut self, ctx: &egui::Context) {
+        if !self.manage_open {
+            return;
+        }
+        let mut open = true;
+        let locked = self.locked();
+        let fs = self.s.font_size;
+        egui::Window::new("Manage Presets")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(fs * 48.0)
+            .pivot(egui::Align2::CENTER_TOP)
+            .default_pos(ctx.content_rect().center_top() + Vec2::new(0.0, fs * 9.0))
+            .show(ctx, |ui| {
+                if self.s.presets.is_empty() {
+                    ui.label("No presets yet. Set up rules / options, then use Presets > Save current as preset…");
+                    return;
+                }
+                if self.s.find_preset(&self.manage_sel).is_none() {
+                    self.manage_sel = self.s.presets[0].name.clone();
+                    self.manage_rename = self.manage_sel.clone();
+                    self.manage_error = None;
+                }
+                ui.add_enabled_ui(!locked, |ui| {
+                    ui.horizontal_top(|ui| {
+                        // list
+                        ui.vertical(|ui| {
+                            ui.set_width(fs * 14.0);
+                            ui.label(RichText::new(format!("{} presets", self.s.presets.len())).weak());
+                            egui::ScrollArea::vertical().id_salt("preset-list").max_height(fs * 24.0).show(ui, |ui| {
+                                let names: Vec<String> = self.s.presets.iter().map(|p| p.name.clone()).collect();
+                                for n in names {
+                                    let label = if self.editing_preset.as_deref() == Some(n.as_str()) {
+                                        format!("✏ {n}")
+                                    } else {
+                                        n.clone()
+                                    };
+                                    if ui.selectable_label(self.manage_sel == n, label).clicked() {
+                                        self.manage_rename = n.clone();
+                                        self.manage_sel = n;
+                                        self.manage_error = None;
+                                    }
+                                }
+                            });
+                        });
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.set_width(fs * 33.0);
+                            self.manage_details(ui)
+                        });
+                    });
+                });
+                ui.separator();
+                ui.label(
+                    RichText::new(
+                        "Stored as [Preset:Name] sections in PhotoSorter.ini. Every change here is saved at once; the previous file is kept as PhotoSorter.ini.bak.",
+                    )
+                    .weak()
+                    .small(),
+                );
+            });
+        if !open {
+            self.manage_open = false;
+        }
+    }
+
+    fn manage_details(&mut self, ui: &mut egui::Ui) {
+        let Some(p) = self.s.find_preset(&self.manage_sel).cloned() else { return };
+        ui.heading(&p.name);
+        ui.horizontal(|ui| {
+            ui.label("Loads");
+            let mut scope = p.scope;
+            egui::ComboBox::from_id_salt("preset-scope").width(220.0).selected_text(scope.label()).show_ui(ui, |ui| {
+                for sc in PresetScope::ALL {
+                    ui.selectable_value(&mut scope, sc, sc.label());
+                }
+            });
+            if scope != p.scope {
+                self.s.set_preset_scope(&p.name, scope);
+                self.save_settings();
+                self.status = format!("Preset “{}” now loads: {}.", p.name, scope.label().to_lowercase());
+            }
+        });
+        egui::Frame::new()
+            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+            .corner_radius(CornerRadius::same(6))
+            .inner_margin(Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                egui::ScrollArea::vertical().id_salt("preset-view").max_height(self.s.font_size * 14.0).show(
+                    ui,
+                    |ui| {
+                        for line in session::preset_summary(&p) {
+                            ui.label(line);
+                        }
+                    },
+                );
+            });
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            let editing = self.editing_preset.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(&p.name));
+            if editing {
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new("💾 Save changes").strong().color(Color32::WHITE))
+                            .fill(green()),
+                    )
+                    .on_hover_text("Write the current rules + options from the main window back to this preset")
+                    .clicked()
+                {
+                    self.save_editing_preset();
+                }
+                if ui.button("Stop editing").clicked() {
+                    self.editing_preset = None;
+                }
+            } else if ui
+                .button("✏ Edit")
+                .on_hover_text("Load this preset into the main window; change it there, then “Save changes”")
+                .clicked()
+            {
+                self.load_preset(&p.name);
+                self.editing_preset = Some(p.name.clone());
+            }
+            if ui.button("📋 Duplicate").clicked()
+                && let Some(n) = self.s.duplicate_preset(&p.name)
+            {
+                self.save_settings();
+                self.status = format!("Duplicated preset as “{n}”.");
+                self.manage_rename = n.clone();
+                self.manage_sel = n;
+                self.manage_error = None;
+            }
+            if ui.button("🗑 Delete…").clicked() {
+                self.dialog = Some(Dialog::DeletePreset(p.name.clone()));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Rename to");
+            let r = ui.add(egui::TextEdit::singleline(&mut self.manage_rename).desired_width(200.0));
+            let check = self.s.validate_preset_name(&self.manage_rename, Some(&p.name));
+            let changed = self.manage_rename.trim() != p.name;
+            let go = ui.add_enabled(changed && check.is_ok(), egui::Button::new("Rename")).clicked()
+                || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && changed && check.is_ok());
+            if go {
+                match self.s.rename_preset(&p.name, &self.manage_rename) {
+                    Ok(n) => {
+                        if self.editing_preset.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(&p.name)) {
+                            self.editing_preset = Some(n.clone());
+                        }
+                        if self.preset_sel.eq_ignore_ascii_case(&p.name) {
+                            self.preset_sel = n.clone();
+                        }
+                        self.save_settings();
+                        self.status = format!("Renamed preset “{}” to “{n}”.", p.name);
+                        self.manage_rename = n.clone();
+                        self.manage_sel = n;
+                        self.manage_error = None;
+                    }
+                    Err(e) => self.manage_error = Some(e),
+                }
+            } else {
+                self.manage_error = if changed { check.err() } else { None };
+            }
+        });
+        if let Some(e) = &self.manage_error {
+            ui.label(RichText::new(format!("⚠ {e}")).color(red()).small());
+        }
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        let Some(mut d) = self.dialog.take() else { return };
+        let mut keep = true;
+        let fs = self.s.font_size;
+        let modal = egui::Modal::new(egui::Id::unique("photosorter-dialog")).show(ctx, |ui| {
+            ui.set_width(fs * 32.0);
+            match &mut d {
+                Dialog::NewProject(w) => {
+                    ui.heading("Start a new project?");
+                    ui.add_space(4.0);
+                    ui.label(
+                        "Clears the folder, the preview and the rename rules, and resets the output options to their defaults. \
+                         No files are moved, renamed or deleted. Saved presets, file types and other settings are kept.",
+                    );
+                    for line in w.iter() {
+                        ui.label(RichText::new(format!("⚠ {line}")).color(amber()));
+                    }
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(egui::Button::new(RichText::new("New Project").strong().color(Color32::WHITE)).fill(green())).clicked() {
+                            self.do_new_project();
+                            keep = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
+                Dialog::SavePreset { name } => {
+                    ui.heading("Save current as preset");
+                    ui.add_space(4.0);
+                    ui.label("Saves the rename rules and the options of steps 1 and 3 into PhotoSorter.ini.");
+                    let r = ui.add(egui::TextEdit::singleline(name).hint_text("preset name").desired_width(f32::INFINITY));
+                    if !r.has_focus() && name.is_empty() {
+                        r.request_focus();
+                    }
+                    let check = self.s.validate_preset_name(name, Some(name.trim()));
+                    match &check {
+                        Err(e) if !name.trim().is_empty() => {
+                            ui.label(RichText::new(format!("⚠ {e}")).color(red()).small());
+                        }
+                        Ok(n) => {
+                            if let Some(p) = self.s.find_preset(n) {
+                                let text = format!("Replaces the existing preset “{}” (what it loads is kept).", p.name);
+                                ui.label(RichText::new(text).color(amber()).small());
+                            }
+                        }
+                        _ => {}
+                    }
+                    ui.add_space(8.0);
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let save = ui.add_enabled(check.is_ok(), egui::Button::new(RichText::new("Save").strong().color(Color32::WHITE)).fill(green())).clicked();
+                        if (save || enter) && let Ok(n) = &check && self.s.save_preset(n) {
+                            let n = self.s.find_preset(n).map(|p| p.name.clone()).unwrap_or_else(|| n.clone());
+                            self.preset_sel = n.clone();
+                            self.save_settings();
+                            self.status = format!("Saved preset “{n}”.");
+                            keep = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
+                Dialog::DeletePreset(name) => {
+                    ui.heading("Delete preset?");
+                    ui.add_space(4.0);
+                    ui.label(format!(
+                        "Delete the preset “{name}”? Its [Preset:{name}] section is removed from PhotoSorter.ini (the previous file is kept as PhotoSorter.ini.bak). No photos or videos are touched."
+                    ));
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(egui::Button::new(RichText::new("Delete").strong().color(Color32::WHITE)).fill(red())).clicked() {
+                            let n = name.clone();
+                            if self.s.delete_preset(&n) {
+                                if self.preset_sel.eq_ignore_ascii_case(&n) {
+                                    self.preset_sel.clear();
+                                }
+                                if self.editing_preset.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(&n)) {
+                                    self.editing_preset = None;
+                                }
+                                self.save_settings();
+                                self.status = format!("Deleted preset “{n}”.");
+                            }
+                            keep = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
+                Dialog::ReadmeMissing(p) => {
+                    ui.heading("README.txt not found");
+                    ui.add_space(4.0);
+                    ui.label("The help file README.txt ships in the PhotoSorter zip and should sit next to PhotoSorter.exe:");
+                    ui.label(RichText::new(p.display().to_string()).monospace().small());
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            keep = false;
+                        }
+                        if let Some(dir) = p.parent().filter(|d| d.is_dir()).map(Path::to_path_buf)
+                            && ui.button("Open program folder").clicked()
+                        {
+                            keep = false;
+                            if let Err(e) = desktop::open_folder(&dir) {
+                                self.status = format!("Cannot open folder: {e}");
+                            }
+                        }
+                    });
+                }
+                Dialog::About => {
+                    ui.heading(format!("PhotoSorter {}", env!("CARGO_PKG_VERSION")));
+                    ui.add_space(4.0);
+                    ui.label("Portable photo & video renamer / sorter for Windows 10/11.");
+                    ui.label("Unsigned build — Windows SmartScreen may warn on first run. MIT License.");
+                    ui.label(RichText::new("A fuller About page will come in a later version.").weak().small());
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
+                Dialog::Message { title, text } => {
+                    ui.heading(title.as_str());
+                    ui.add_space(4.0);
+                    ui.label(text.as_str());
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Close").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
+            }
+        });
+        if modal.should_close() {
+            keep = false;
+        }
+        // an action may have opened another dialog; only restore if not
+        if keep && self.dialog.is_none() {
+            self.dialog = Some(d);
+        }
+    }
+}
+
+fn options_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(CornerRadius::same(8))
+        .inner_margin(Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(RichText::new(title).strong().color(accent(ui)));
+            ui.add_space(2.0);
+            add(ui);
+        });
+}
+
+/// "Filename > EXIF / video > Modified" (enabled sources in order).
+fn order_summary(order_ui: &[(SourceKind, bool)]) -> String {
+    let v: Vec<&str> = order_ui.iter().filter(|(_, on)| *on).map(|(k, _)| kind_desc(*k)).collect();
+    v.join(" > ")
 }
 
 fn kind_desc(k: SourceKind) -> &'static str {
