@@ -1,10 +1,10 @@
-# PhotoSorter 2.0
+# PhotoSorter 2.0.1
 
 Portable Windows 10/11 GUI (Rust + eframe/egui) that renames images and
 videos with an ordered, ReNamer-style rule list and then (optionally) moves
 them into `Month YYYY` subfolders inside each file's own folder — with a live
 preview, collision-safe moves and a JSON undo log. End-user docs:
-`dist/v2.0/README.txt` (shipped as `README.txt` in the zip). v1 docs:
+`dist/v2.0.1/README.txt` (shipped as `README.txt` in the zip). v1 docs:
 `dist/README.txt`.
 
 ## Window layout (top to bottom) and why

@@ -4,3 +4,5 @@ dist/*
 !dist/README.txt
 !dist/v2.0/
 dist/v2.0/*.exe
+!dist/v2.0.1/
+dist/v2.0.1/*.exe
