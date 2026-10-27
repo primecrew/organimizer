@@ -17,13 +17,17 @@
 //! 4. [`ops`]       – execute a plan (rename, or copy+delete across devices),
 //!    write an undo log, and undo the last run.
 //! 5. [`settings`]  – portable, commented `PhotoSorter.ini` beside the exe.
+//! 6. [`session`] (New Project, preset summaries) and [`desktop`] (open the
+//!    README / folders with the default app) back the menu bar.
 
 pub mod date_source;
+pub mod desktop;
 pub mod filename_date;
 pub mod ops;
 pub mod plan;
 pub mod rename;
 pub mod scan;
+pub mod session;
 pub mod settings;
 pub mod template;
 

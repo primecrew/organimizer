@@ -51,6 +51,39 @@ sections) → restart → load preset "Clean names" (rename-only preview with
 amber clash suffixes). Screenshots in `screenshots/`, trees in
 `e2e-gui-wine/`.
 
+## v2.0.2 (menu bar, Tools > Options, Manage Presets)
+* `cargo test --no-default-features`: **89 passed, 0 failed** on Linux and
+  as a Windows binary under Wine (79 earlier tests unchanged + 10 new:
+  `extension_summary_counts_effective_types`,
+  `options_extension_edit_persists_and_applies_to_scan`,
+  `preset_duplicate_rename_delete_and_uniqueness`,
+  `preset_scope_roundtrip_apply_and_old_inis`,
+  `save_is_atomic_and_keeps_a_backup`, 4 × `session::` New Project /
+  preset-summary tests, `readme_is_found_only_next_to_exe`).
+* Backwards compatibility: the v2.0.1 core (`git worktree` at tag v2.0.1,
+  `examples/e2e.rs`) loads an INI written by 2.0.2 (with `scope = …`
+  preset keys) and builds the same preview; 2.0/2.0.1 presets without
+  `scope` load as "both" (unit test).
+* GUI under Wine 10 + Xvfb + xfwm4, driven with xdotool (screenshots
+  `screenshots/v2.0.2-*.png`): main window shows "File types: 26 image &
+  video types (change in Tools > Options)" and a one-line Auto priority;
+  Tools > Options: typed `jpg, mp4, txt` → "txt" listed as ignored → Save →
+  `extensions = jpg, mp4, txt` in PhotoSorter.ini and the preview dropped
+  from 4 to 2 files (png/mov no longer scanned); "Reset to defaults"
+  restores the 26-type list. Manage Presets: Duplicate ("Camera roll
+  copy"), Rename rejected `Trip]bad`, accepted `Trip 2026`, Loads → "Rename
+  rules only" (`scope = rename` written), Edit → delete a rule → Save
+  changes (preset now 1 rule), Delete with confirmation; Save current as
+  preset (empty name refused, existing name shows "Replaces…").
+  PhotoSorter.ini.bak created on save. Apply (2 files) → Ctrl+N showed the
+  "last Apply not undone" warning → New Project: file tree + SHA-256 of
+  every file and the INI unchanged, undo log kept → re-entered the folder →
+  File > Undo Last Apply restored everything → File > Exit saved the INI
+  (rules cleared, presets/extensions kept). F1 opened README.txt in Wine
+  Notepad via ShellExecuteW; with README.txt missing the "not found" dialog
+  appeared and "Open program folder" opened Wine's Explorer. About dialog
+  shows 2.0.2 / unsigned build.
+
 ## Not verified
 Everything above ran on Linux or under Wine 10.0 only, never on real Windows
 10/11 (NTFS, SmartScreen, Defender, high-DPI, OneDrive folders, network
