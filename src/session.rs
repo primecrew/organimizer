@@ -111,7 +111,8 @@ mod tests {
     fn busy_settings() -> Settings {
         let mut s = Settings::default();
         s.last_folder = r"D:\Photos\2024".into();
-        s.include_subfolders = false;
+        // not the default (off since 2.0.4), so "kept" is really tested
+        s.include_subfolders = true;
         s.extensions = "jpg, mp4".into();
         s.rules = vec![RuleSpec::new(RuleKind::Case(CaseMode::Upper))];
         s.sort_into_folders = false;
@@ -144,7 +145,8 @@ mod tests {
         assert_eq!(n.presets, s.presets);
         assert_eq!(n.extensions, "jpg, mp4");
         assert_eq!(n.date.auto_order, s.date.auto_order);
-        assert!(!n.include_subfolders);
+        assert!(n.include_subfolders); // user setting, kept
+        assert_ne!(n.include_subfolders, d.include_subfolders);
         assert_eq!((n.theme, n.font_size, n.window_width), (Theme::Light, 19.0, 1500.0));
         // idempotent
         assert_eq!(new_project(&n), n);

@@ -2040,8 +2040,10 @@ impl App {
                 ui.label(RichText::new("Folder does not exist").color(red()).small());
             }
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.s.include_subfolders, "Include subfolders")
-                    .on_hover_text("Every folder containing photos/videos gets its own Month YYYY subfolders.");
+                ui.checkbox(&mut self.s.include_subfolders, "Include subfolders").on_hover_text(
+                    "Off (default): only the files directly in this folder. On: also every subfolder; \
+                     each folder containing photos/videos gets its own Month YYYY subfolders.",
+                );
                 ui.separator();
                 let summary = scan::extension_summary(&self.s.extensions);
                 let warn = !scan::rejected_extensions(&self.s.extensions).is_empty();

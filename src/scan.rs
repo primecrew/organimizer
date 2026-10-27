@@ -221,4 +221,27 @@ mod tests {
         let r = scan(d.path(), false, &exts, &c, &mut |_, _| {});
         assert_eq!(r.files.len(), 1);
     }
+
+    #[test]
+    fn default_settings_scan_only_top_folder() {
+        // 2.0.4: Include subfolders is off by default -> non-recursive scan
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("2023/Trip/deep")).unwrap();
+        for f in ["top1.jpg", "top2.png", "2023/a.jpg", "2023/Trip/b.heic", "2023/Trip/deep/c.mp4"] {
+            std::fs::write(d.path().join(f), b"x").unwrap();
+        }
+        let s = crate::settings::Settings::default();
+        let exts = parse_extensions(&s.extensions);
+        let c = AtomicBool::new(false);
+        let r = scan(d.path(), s.include_subfolders, &exts, &c, &mut |_, _| {});
+        let mut names: Vec<String> =
+            r.files.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["top1.jpg", "top2.png"]);
+        assert!(r.files.iter().all(|p| p.parent() == Some(d.path())));
+        assert_eq!(r.dirs_scanned, 1);
+        // ticking the box finds the nested files too
+        let r = scan(d.path(), true, &exts, &c, &mut |_, _| {});
+        assert_eq!(r.files.len(), 5);
+    }
 }
