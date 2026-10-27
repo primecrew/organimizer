@@ -1,0 +1,2 @@
+27:include_subfolders = true
+182:; rule chain (ruleN keys as in [Rules]) plus the options include_subfolders,

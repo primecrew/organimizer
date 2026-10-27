@@ -83,7 +83,9 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             last_folder: String::new(),
-            include_subfolders: true,
+            // Off since 2.0.4 (was on): only the chosen folder is scanned
+            // unless the user ticks "Include subfolders".
+            include_subfolders: false,
             extensions: DEFAULT_EXTENSIONS.to_string(),
             date: DateConfig::default(),
             folder_template: DEFAULT_TEMPLATE.to_string(),
@@ -543,7 +545,9 @@ last_folder = {last_folder}
 
 ; Also scan every subfolder of the chosen folder.
 ; Each folder that contains images gets its own "Month YYYY" subfolders.
-; Allowed: true / false. Default: true
+; false = only the files directly inside the chosen folder.
+; Allowed: true / false. Default: false (off since 2.0.4; an explicit
+; true saved by an older version is kept - set false or delete the line).
 include_subfolders = {include_subfolders}
 
 ; File extensions to process (case-insensitive), separated by commas.
@@ -885,7 +889,7 @@ mod tests {
     fn lenient_parsing() {
         let text = "\u{feff}[general]\nINCLUDE_SUBFOLDERS = maybe\nbogus=1\n[Date]\nsource = sundial\nauto_order = created, nonsense, created, filename\nfallback=CREATED\n[Window]\nfont_size = 999\nwidth = abc\ntheme = Light\n[Preset:Holiday]\nsource=exif\ngarbage line without equals\n";
         let s = Settings::from_ini(text);
-        assert!(s.include_subfolders); // invalid -> default
+        assert!(!s.include_subfolders); // invalid -> default (off since 2.0.4)
         assert_eq!(s.date.mode, DateMode::Auto);
         assert_eq!(s.date.auto_order, vec![SourceKind::Created, SourceKind::Filename]);
         assert_eq!(s.date.fallback, Fallback::Created);
@@ -980,10 +984,73 @@ mod tests {
         // what v0.1.0 wrote: no [Rules], no sort_into_month_folders
         let v1 = "[General]\r\nlast_folder = C:\\Pics\r\ninclude_subfolders = true\r\nextensions = png, jpg, jpeg, gif, bmp, webp, tif, tiff, heic\r\n[Date]\r\nsource = auto\r\n[Output]\r\nfolder_template = {MMMM} {YYYY}\r\n";
         let s = Settings::from_ini(v1);
+        assert!(s.include_subfolders); // explicit saved value kept
         assert!(s.rules.is_empty());
         assert!(s.sort_into_folders);
         assert!(s.presets.is_empty());
         assert_eq!(s.extensions, crate::scan::V1_DEFAULT_EXTENSIONS);
+    }
+
+    // ------------------------------------------------------------ 2.0.4 --
+
+    #[test]
+    fn fresh_default_include_subfolders_is_off() {
+        assert!(!Settings::default().include_subfolders);
+        assert!(!Settings::default().to_preset("x").include_subfolders);
+        let text = Settings::default().to_ini();
+        assert!(text.contains("include_subfolders = false"), "{text}");
+        assert!(text.contains("Default: false"));
+        // fresh start: no INI file -> created with the default (off)
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join(INI_NAME);
+        let l = load_or_create(Some(p.clone()));
+        assert!(!l.settings.include_subfolders);
+        assert!(std::fs::read_to_string(&p).unwrap().contains("include_subfolders = false"));
+    }
+
+    #[test]
+    fn include_subfolders_explicit_true_preserved() {
+        for v in ["true", "TRUE", "yes", "1", "on", " true "] {
+            let s = Settings::from_ini(&format!("[General]\ninclude_subfolders = {v}\n"));
+            assert!(s.include_subfolders, "{v}");
+            // and it survives a save/load roundtrip
+            assert!(Settings::from_ini(&s.to_ini()).include_subfolders);
+        }
+        let s = Settings::from_ini("[General]\ninclude_subfolders = false\n");
+        assert!(!s.include_subfolders);
+    }
+
+    #[test]
+    fn include_subfolders_missing_or_invalid_is_off() {
+        for text in [
+            "",
+            "[General]\nlast_folder = C:\\Pics\n",
+            "[General]\ninclude_subfolders =\n",
+            "[General]\ninclude_subfolders = maybe\n",
+            "[General]\ninclude_subfolders = 2\n",
+            "[Date]\ninclude_subfolders = true\n", // wrong section
+        ] {
+            assert!(!Settings::from_ini(text).include_subfolders, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn preset_include_subfolders_missing_off_explicit_kept() {
+        let text = "[General]\ninclude_subfolders = true\n\
+                    [Preset:Old]\nsource = exif\n\
+                    [Preset:On]\ninclude_subfolders = true\n\
+                    [Preset:Off]\ninclude_subfolders = false\n\
+                    [Preset:Bad]\ninclude_subfolders = sometimes\n";
+        let s = Settings::from_ini(text);
+        assert!(s.include_subfolders);
+        let get = |n: &str| s.presets.iter().find(|p| p.name == n).unwrap().include_subfolders;
+        assert!(!get("Old")); // missing -> app default (off), not the main [General] value
+        assert!(get("On"));
+        assert!(!get("Off"));
+        assert!(!get("Bad"));
+        // explicit values are written back unchanged
+        let back = Settings::from_ini(&s.to_ini());
+        assert_eq!(back.presets, s.presets);
     }
 
     #[test]

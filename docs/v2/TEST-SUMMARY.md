@@ -128,6 +128,40 @@ amber clash suffixes). Screenshots in `screenshots/`, trees in
   the preview / confirm dialog counts only the innermost folders (11 shown
   vs 21 created and removed on undo).
 
+## v2.0.4 ("Include subfolders" off by default)
+* Change: `Settings::default().include_subfolders` is now `false` (was
+  `true`); INI template comment says "Default: false"; GUI hover text
+  explains off/on. A missing / empty / invalid value in `[General]` or in a
+  `[Preset:Name]` section → false; an explicit `true` (e.g. saved by an
+  older version) is kept. File > New Project still keeps the user's value.
+* `cargo test --no-default-features`: **103 passed, 0 failed** on Linux and
+  as a Windows binary under Wine (`wine64`). 98 earlier tests, of which 3
+  updated: `settings::lenient_parsing` (invalid → default is now false),
+  `settings::v1_ini_loads_unchanged_with_no_rules` (now also asserts the
+  saved `include_subfolders = true` is kept),
+  `session::new_project_resets_session_and_keeps_preferences` (uses a
+  non-default `true` so "kept" is really tested). 5 new:
+  `settings::fresh_default_include_subfolders_is_off` (default, template
+  text, fresh INI created with `false`),
+  `settings::include_subfolders_explicit_true_preserved` (true/yes/1/on +
+  roundtrip), `settings::include_subfolders_missing_or_invalid_is_off`,
+  `settings::preset_include_subfolders_missing_off_explicit_kept`,
+  `scan::default_settings_scan_only_top_folder` (default settings list only
+  the 2 top-level files of a 3-level tree, 1 dir scanned; ticked → all 5).
+* GUI under Wine 10 + Xvfb (1920×1080) + xfwm4, release exe, **no INI
+  present**, driven with xdotool, on the 24-file sample tree
+  (`make_tree.sh`, `e2e-gui-wine-v2.0.4/tree-sample.txt`):
+  * Start: INI created with `include_subfolders = false`; checkbox
+    unticked. Typed the folder → preview "5 files in 1 folders", only the
+    top-level files (current folder `.`)
+    (`screenshots/v2.0.4-fresh-start-subfolders-off.png`).
+  * Ticked "Include subfolders" → "17 files in 10 folders" incl.
+    `Already sorted`, `Downloads`, `Holiday 2023\Videos`, `Phone\DCIM\Camera`
+    (`screenshots/v2.0.4-subfolders-ticked.png`).
+  * Exit → INI has `include_subfolders = true`; restart → checkbox still
+    ticked and 17 files (saved choice honoured). Nothing was applied; the
+    tree was unchanged.
+
 ## Not verified
 Everything above ran on Linux or under Wine 10.0 only, never on real Windows
 10/11 (NTFS, SmartScreen, Defender, high-DPI, OneDrive folders, network

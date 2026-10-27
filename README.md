@@ -1,10 +1,10 @@
-# PhotoSorter 2.0.3
+# PhotoSorter 2.0.4
 
 Portable Windows 10/11 GUI (Rust + eframe/egui) that renames images and
 videos with an ordered, ReNamer-style rule list and then (optionally) moves
 them into `Month YYYY` subfolders inside each file's own folder — with a live
 preview, collision-safe moves and a JSON undo log. End-user docs:
-`dist/v2.0.3/README.txt` (shipped as `README.txt` in the zip). v1 docs:
+`dist/v2.0.4/README.txt` (shipped as `README.txt` in the zip). v1 docs:
 `dist/README.txt`.
 
 ## Window layout (top to bottom) and why
@@ -14,7 +14,8 @@ preview, collision-safe moves and a JSON undo log. End-user docs:
    Presets…), Tools (Options…: file types with "Reset to defaults" + Auto
    date priority; Open Settings / Undo Log Folder), Help (F1 → README.txt
    via `ShellExecuteW`, About).
-1. **Source & filter** – folder, include subfolders, one-line file-type
+1. **Source & filter** – folder, include subfolders (off by default since
+   2.0.4), one-line file-type
    summary ("File types: 26 image & video types") + "Options…" button.
 2. **Rename rules** – ReNamer-style list: checkbox per rule, ⏶/⏷ reorder,
    duplicate, delete, ✏ inline editor, "➕ Add rule" menu, presets row.
@@ -47,6 +48,20 @@ window layout"; the ☀/🌙 icon in the top bar stays as a quick toggle.
 Folder templates may contain `{/}` to make nested folders such as
 `{YYYY}{/}{MM} {MMMM}` → `2024\03 March`; each level is sanitised on its own
 and every created level is recorded in the undo log.
+
+## Include subfolders: off by default (since 2.0.4)
+
+A fresh start (no `PhotoSorter.ini`) now has "Include subfolders" unticked,
+so the preview and Apply only touch the files directly inside the chosen
+folder; tick the box to also scan every subfolder (each folder with photos
+then gets its own date folders). A missing or invalid `include_subfolders`
+value in `[General]` or in a `[Preset:Name]` section also means off.
+**Upgrading:** an INI saved by an older version normally contains
+`include_subfolders = true` (the old default); that saved choice is kept,
+not overridden. To switch to the new default, untick the box (it is saved on
+exit), set the line to `false`, delete the line, or delete the INI. Presets
+that store an explicit value keep it. File > New Project still keeps the
+current "Include subfolders" setting.
 
 ## Code layout
 
