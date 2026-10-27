@@ -84,7 +84,56 @@ amber clash suffixes). Screenshots in `screenshots/`, trees in
   appeared and "Open program folder" opened Wine's Explorer. About dialog
   shows 2.0.2 / unsigned build.
 
+## v2.0.3 (window layout memory, theme in Options, folder name builder)
+* `cargo test --no-default-features`: **98 passed, 0 failed** on Linux and
+  as a Windows binary under Wine (`wine64`); the 89 earlier tests are
+  unchanged + 9 new: `template::nested_subfolder_parts_are_safe`,
+  `template::builder_template_mapping_and_round_trips`,
+  `template::builder_rejects_custom_templates_and_invalid_input`,
+  `ops::nested_year_month_template_apply_rerun_and_undo`,
+  `settings::window_layout_and_theme_roundtrip_and_old_inis`, and 4 ×
+  `window_state::` (parse/validate column widths and numbers, clamp to the
+  monitor work areas incl. off-screen / partly off / tiny / huge / no
+  monitor / multi-monitor, remembered rect while maximized/minimized).
+* GUI under Wine 10 + Xvfb (1920×1080, one monitor) + xfwm4, release
+  exe, driven with xdotool (`screenshots/v2.0.3-*.png`):
+  * Folder name: default `{MMMM} {YYYY}` shown as "March 2024 (default)"
+    with a live example; layout dropdown (9 layouts); Build your own with a
+    Custom separator ` - ` (valid) and `a/b` (red hint, not applied);
+    Advanced raw template with legend; invalid template `Pics {YYYY}:{MM}/{FOO}`
+    shows "Custom template" + the inline warnings (unknown token, `:` `/`
+    replaced with `_`, use `{/}`); nested `{YYYY}{/}{MM} {MMMM}` example
+    `2024 \ 03 March`; "More options" collapses fallback / ambiguous /
+    Auto priority.
+  * Sort run with `{YYYY}{/}{MM} {MMMM}` on the 24-file sample tree:
+    preview 17 moved → Apply → 17 moved, 0 errors, multiset of file
+    SHA-256 identical → Refresh: 17 "already sorted" → Undo: 17 restored,
+    21 empty folders removed (year + month levels), tree and every hash
+    identical to the original, log renamed `….undone.json`
+    (`e2e-gui-wine-v2.0.3/`).
+  * Tools > Options > Appearance: Dark / Light / Follow system apply live
+    (Follow system resolved to Light under Wine) and are written to the
+    INI without pressing Save; "Reset window layout" → 1200×800 centred,
+    default panel height / column widths / sections, layout keys cleared.
+  * Restart: moved/resized to 1480×1020, widened two columns, collapsed
+    "Rename rules", opened "More options" + Advanced → quit → start: same
+    position and size (`geo-before/after.txt`), same panel height and
+    column widths (`window-ini-*.txt` identical, no growth on restart),
+    same open/collapsed sections.
+  * Clamp: x = 5000 with 300×200 → default size centred; (1500, 900) at
+    1300×850 → moved fully on-screen; `maximized = true` → starts maximized
+    and keeps the normal size in the INI; first start centred.
+  * Older INIs (2.0.2, no new keys) load unchanged (unit test).
+* Known minor issue: with a nested template the "New folders" count in
+  the preview / confirm dialog counts only the innermost folders (11 shown
+  vs 21 created and removed on undo).
+
 ## Not verified
 Everything above ran on Linux or under Wine 10.0 only, never on real Windows
 10/11 (NTFS, SmartScreen, Defender, high-DPI, OneDrive folders, network
-drives and >260-char paths were not exercised).
+drives and >260-char paths were not exercised). For 2.0.3 in particular:
+the multi-monitor / per-monitor-DPI clamp (Win32 EnumDisplayMonitors +
+GetDpiForMonitor) is unit-tested with synthetic monitor lists and was only
+run on Wine's single virtual monitor; "Follow system" was only seen with
+Wine's default (light) setting, not with a real Windows dark-mode switch;
+window decorations sizes are Wine/xfwm4's, not Windows 11's.

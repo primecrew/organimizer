@@ -1,0 +1,13 @@
+[Window]
+theme = dark
+font_size = 15
+width = 1480
+height = 1020
+x = 76
+y = 20
+maximized = false
+setup_panel_height = 484
+files_columns = 272, 255, 120, 226, 113, 105
+folders_columns = 
+open_source = true
+open_rules = false

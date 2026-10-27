@@ -199,19 +199,35 @@ pub fn execute(plan: &Plan, cancel: &AtomicBool, progress: &mut dyn FnMut(usize,
             continue;
         }
         if !item.dest_dir.exists() {
-            match fs::create_dir(&item.dest_dir) {
-                Ok(()) => {
-                    created.insert(item.dest_dir.clone());
-                    log.created_dirs.push(item.dest_dir.clone());
-                    dirty += 1;
+            // Create every missing level (nested {/} templates), top-down, and
+            // log each one so undo can remove them again (deepest first).
+            let mut missing: Vec<PathBuf> = item
+                .dest_dir
+                .ancestors()
+                .take_while(|p| !p.as_os_str().is_empty() && *p != item.base_dir.as_path() && !p.exists())
+                .map(Path::to_path_buf)
+                .collect();
+            missing.reverse();
+            let mut failed = false;
+            for dir in missing {
+                match fs::create_dir(&dir) {
+                    Ok(()) => {
+                        created.insert(dir.clone());
+                        log.created_dirs.push(dir);
+                        dirty += 1;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(e) => {
+                        report
+                            .errors
+                            .push((item.source.clone(), format!("Cannot create folder {}: {e}", dir.display())));
+                        failed = true;
+                        break;
+                    }
                 }
-                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(e) => {
-                    report
-                        .errors
-                        .push((item.source.clone(), format!("Cannot create folder {}: {e}", item.dest_dir.display())));
-                    continue;
-                }
+            }
+            if failed {
+                continue;
             }
         }
         // Re-check collisions at apply time (disk may have changed).
@@ -446,6 +462,50 @@ mod tests {
         // modification times are preserved by rename
         let m = fs::metadata(r.join("a.jpg")).unwrap().modified().unwrap();
         assert_eq!(m, SystemTime::UNIX_EPOCH + Duration::from_secs(MAR_2024));
+    }
+
+    #[test]
+    fn nested_year_month_template_apply_rerun_and_undo() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("a.jpg"), MAR_2024, "a");
+        touch(&r.join("b.jpg"), JUL_2023, "b");
+        touch(&r.join("Trip/c.jpg"), MAR_2024, "c");
+        touch(&r.join("2024/March/old.jpg"), MAR_2024, "old"); // already sorted (2 levels)
+        touch(&r.join("2024/x.jpg"), JUL_2023, "x"); // year folder exists, month does not
+        let before = snapshot(r);
+        let opts = PlanOptions {
+            template: "{YYYY}{/}{MMMM}".into(),
+            date: DateConfig { mode: DateMode::Only(SourceKind::Modified), ..Default::default() },
+            ..Default::default()
+        };
+        let exts = crate::scan::parse_extensions("");
+        let no = AtomicBool::new(false);
+        let files = crate::scan::scan(r, true, &exts, &no, &mut |_, _| {}).files;
+        let plan = build_plan(r, &files, &opts, &default_stages(), &no, &mut |_, _| {});
+        assert_eq!(plan.counts().to_move, 4);
+        assert_eq!(plan.counts().already_sorted, 1);
+        for it in &plan.items {
+            assert!(it.dest_dir.starts_with(r), "{:?}", it.dest_dir);
+        }
+        let rep = execute(&plan, &no, &mut |_, _, _| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert_eq!(fs::read_to_string(r.join("2024/March/a.jpg")).unwrap(), "a");
+        assert_eq!(fs::read_to_string(r.join("2023/July/b.jpg")).unwrap(), "b");
+        assert_eq!(fs::read_to_string(r.join("Trip/2024/March/c.jpg")).unwrap(), "c");
+        assert_eq!(fs::read_to_string(r.join("2024/March/old.jpg")).unwrap(), "old");
+        // "2024" is a year level of the template: x.jpg (July 2023) is sorted relative to the root
+        assert_eq!(fs::read_to_string(r.join("2023/July/x.jpg")).unwrap(), "x");
+        // re-run: nothing left to do
+        let files2 = crate::scan::scan(r, true, &exts, &no, &mut |_, _| {}).files;
+        let plan2 = build_plan(r, &files2, &opts, &default_stages(), &no, &mut |_, _| {});
+        assert_eq!(plan2.counts().to_move, 0, "{:?}", plan2.items.iter().map(|i| &i.dest_dir).collect::<Vec<_>>());
+        // undo removes every created level and restores the exact tree
+        let u = undo(&rep.undo_log.unwrap(), &mut |_, _| {});
+        assert!(u.errors.is_empty(), "{:?}", u.errors);
+        assert_eq!(u.restored, 4);
+        assert_eq!(u.dirs_removed, 4); // 2023, 2023/July, Trip/2024, Trip/2024/March
+        assert_eq!(snapshot(r), before);
     }
 
     #[test]

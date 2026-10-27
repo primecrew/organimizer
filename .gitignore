@@ -8,3 +8,5 @@ dist/v2.0/*.exe
 dist/v2.0.1/*.exe
 !dist/v2.0.2/
 dist/v2.0.2/*.exe
+!dist/v2.0.3/
+dist/v2.0.3/*.exe
