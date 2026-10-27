@@ -36,7 +36,8 @@ use photo_sorter::rename::{
 };
 use photo_sorter::scan;
 use photo_sorter::settings::{self, Loaded, PresetScope, Settings, Theme};
-use photo_sorter::template::format_folder_name;
+use photo_sorter::template::{self as tpl, FolderBuilder, MonthStyle, PartOrder, Separator, YearStyle};
+use photo_sorter::window_state::{self, WindowLayout};
 use photo_sorter::{desktop, session};
 
 // ---------------------------------------------------------------------------
@@ -256,9 +257,23 @@ pub struct App {
     view: Vec<usize>,
     view_dirty: bool,
 
-    open_source: bool,
-    open_rules: bool,
-    open_output: bool,
+    /// Step 3 "Build your own" chosen (otherwise a ready-made layout).
+    folder_build: bool,
+    /// Last valid builder state (kept while the template is "Custom").
+    builder: FolderBuilder,
+    /// Text of the custom separator field.
+    custom_sep: String,
+    /// "Custom…" separator chosen (kept even if the text equals e.g. "-").
+    sep_custom: bool,
+    /// Template the builder controls were last synced with.
+    builder_synced: String,
+    /// Bumped by "Reset window layout" so panels/tables forget their sizes.
+    layout_gen: u32,
+    /// Window/layout persistence: snapshot last written, pending snapshot
+    /// and since when it is pending (debounced save, no per-frame writes).
+    saved_snapshot: String,
+    pending_snapshot: (String, Option<Instant>),
+    started: Instant,
     open_rule: Option<usize>,
     preset_sel: String,
     preset_name: String,
@@ -288,7 +303,7 @@ impl App {
                 order_ui.push((k, false));
             }
         }
-        App {
+        let mut app = App {
             order_ui,
             ini_path: loaded.path,
             notice: loaded.notice,
@@ -321,9 +336,15 @@ impl App {
             sort: (SortCol::Current, true),
             view: vec![],
             view_dirty: true,
-            open_source: true,
-            open_rules: true,
-            open_output: true,
+            folder_build: false,
+            builder: FolderBuilder::from_template(&s.folder_template).unwrap_or_default(),
+            custom_sep: "+".into(),
+            sep_custom: false,
+            builder_synced: String::from("\0"),
+            layout_gen: 0,
+            saved_snapshot: String::new(),
+            pending_snapshot: (String::new(), None),
+            started: Instant::now(),
             open_rule: None,
             preset_sel: String::new(),
             preset_name: String::new(),
@@ -339,7 +360,9 @@ impl App {
             applied_theme: None,
             applied_font: 0.0,
             s,
-        }
+        };
+        app.saved_snapshot = app.layout_snapshot();
+        app
     }
 
     fn root(&self) -> PathBuf {
@@ -382,7 +405,84 @@ impl App {
         self.plan.is_some() && !self.plan_cancelled && self.plan_sig == self.signature()
     }
 
+    /// Everything window-related that is saved automatically.
+    fn layout_snapshot(&self) -> String {
+        format!(
+            "{:?}|{}|{}|{}|{:?}",
+            self.s.theme,
+            self.s.font_size,
+            self.s.window_width.round(),
+            self.s.window_height.round(),
+            self.s.layout
+        )
+    }
+
+    /// Save window / layout / theme changes at most once they have been
+    /// stable for 1.5 s (and no mouse button is held), never per frame.
+    fn autosave_layout(&mut self, ctx: &egui::Context) {
+        let snap = self.layout_snapshot();
+        if snap == self.saved_snapshot {
+            self.pending_snapshot = (String::new(), None);
+            return;
+        }
+        if self.pending_snapshot.0 != snap {
+            self.pending_snapshot = (snap, Some(Instant::now()));
+        }
+        let since = self.pending_snapshot.1.map(|t| t.elapsed()).unwrap_or_default();
+        let held = ctx.input(|i| i.pointer.any_down());
+        if since >= Duration::from_millis(1500) && !held {
+            self.save_settings();
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(1600).saturating_sub(since));
+        }
+    }
+
+    /// Track the native window (position, size, maximized). Ignored for the
+    /// first second, while the OS is still placing / maximizing the window.
+    fn track_window(&mut self, ctx: &egui::Context) {
+        if self.started.elapsed() < Duration::from_secs(1) {
+            ctx.request_repaint_after(Duration::from_millis(1100));
+            return;
+        }
+        let (outer, inner, max, min) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.outer_rect, v.inner_rect, v.maximized.unwrap_or(false), v.minimized.unwrap_or(false))
+        });
+        if let Some((pos, size)) =
+            window_state::remember(outer.map(|r| [r.min.x, r.min.y]), inner.map(|r| [r.width(), r.height()]), max, min)
+        {
+            self.s.layout.maximized = max;
+            if let Some([x, y]) = pos {
+                (self.s.layout.x, self.s.layout.y) = (Some(x), Some(y));
+            }
+            if let Some([w, h]) = size {
+                (self.s.window_width, self.s.window_height) = (w, h);
+            }
+        }
+    }
+
+    /// Tools > Options > Reset window layout: default size, centered, not
+    /// maximized, default panel height / column widths / open sections.
+    fn reset_layout(&mut self, ctx: &egui::Context) {
+        self.s.layout = WindowLayout::default();
+        let [w, h] = window_state::DEFAULT_SIZE;
+        let p = window_state::restore_placement(None, [w, h], false, &photo_sorter::desktop::monitor_work_areas());
+        (self.s.window_width, self.s.window_height) = (p.size[0], p.size[1]);
+        self.layout_gen += 1;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(p.size[0], p.size[1])));
+        if let Some(m) = photo_sorter::desktop::monitor_work_areas().first() {
+            let x = m.x + ((m.w - p.size[0] - 16.0) / 2.0).max(0.0);
+            let y = m.y + ((m.h - p.size[1] - 60.0) / 2.0).max(0.0);
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
+        }
+        // ignore the old rect while the window moves
+        self.started = Instant::now();
+        self.status = "Window layout reset to the defaults.".into();
+    }
+
     fn save_settings(&mut self) {
+        self.saved_snapshot = self.layout_snapshot();
         if let Some(p) = &self.ini_path
             && let Err(e) = settings::save(p, &self.s)
         {
@@ -717,8 +817,9 @@ impl App {
         self.applied_theme = Some(self.s.theme);
         self.applied_font = self.s.font_size;
         ctx.set_theme(match self.s.theme {
-            Theme::Dark => egui::Theme::Dark,
-            Theme::Light => egui::Theme::Light,
+            Theme::Dark => egui::ThemePreference::Dark,
+            Theme::Light => egui::ThemePreference::Light,
+            Theme::System => egui::ThemePreference::System,
         });
         let fs = self.s.font_size;
         ctx.all_styles_mut(|style| {
@@ -1371,14 +1472,8 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
-        // remember window size
-        if let Some(r) = ctx.input(|i| i.viewport().inner_rect)
-            && r.width() >= 640.0
-            && r.height() >= 420.0
-        {
-            self.s.window_width = r.width();
-            self.s.window_height = r.height();
-        }
+        // remember window position / size / maximized (saved debounced)
+        self.track_window(&ctx);
 
         // drag & drop a folder (or a file inside it)
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
@@ -1417,6 +1512,7 @@ impl eframe::App for App {
         self.options_window(&ctx);
         self.manage_presets_window(&ctx);
         self.dialogs(&ctx);
+        self.autosave_layout(&ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1755,9 +1851,11 @@ impl App {
                         .weak(),
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let (icon, tip, next) = match self.s.theme {
-                        Theme::Dark => ("☀ Light", "Switch to light theme", Theme::Light),
-                        Theme::Light => ("🌙 Dark", "Switch to dark theme", Theme::Dark),
+                    // quick shortcut; Dark / Light / Follow system in Tools > Options
+                    let (icon, tip, next) = if ui.visuals().dark_mode {
+                        ("☀", "Switch to the light theme (more in Tools > Options > Appearance)", Theme::Light)
+                    } else {
+                        ("🌙", "Switch to the dark theme (more in Tools > Options > Appearance)", Theme::Dark)
                     };
                     if ui.button(icon).on_hover_text(tip).clicked() {
                         self.s.theme = next;
@@ -1896,7 +1994,10 @@ impl App {
     /// Steps 1–3 in a resizable, scrollable top area.
     fn setup_panel(&mut self, ui: &mut egui::Ui) {
         let fs = self.s.font_size;
-        egui::Panel::top("setup").resizable(true).default_size(fs * 29.0).min_size(fs * 4.0).show(ui, |ui| {
+        let default_h = self.s.layout.setup_height.unwrap_or(fs * 29.0);
+        let panel =
+            egui::Panel::top(("setup", self.layout_gen)).resizable(true).default_size(default_h).min_size(fs * 4.0);
+        let r = panel.show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.add_space(6.0);
                 let locked = matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo));
@@ -1910,6 +2011,11 @@ impl App {
                 ui.add_space(6.0);
             });
         });
+        // remember a height the user dragged to (not the automatic default)
+        let h = r.response.rect.height().round();
+        if (h - default_h).abs() > 1.5 && h >= 40.0 {
+            self.s.layout.setup_height = Some(h);
+        }
     }
 
     fn source_section(&mut self, ui: &mut egui::Ui) {
@@ -1918,7 +2024,7 @@ impl App {
         } else {
             format!("{}{}", self.s.folder_trimmed(), if self.s.include_subfolders { "  (+ subfolders)" } else { "" })
         };
-        let mut open = self.open_source;
+        let mut open = self.s.layout.source_open;
         step_section(ui, "1", "Source & filter", &summary, &mut open, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("📂 Browse…").on_hover_text("File > Open Folder… (Ctrl+O)").clicked() {
@@ -1948,7 +2054,7 @@ impl App {
                 }
             });
         });
-        self.open_source = open;
+        self.s.layout.source_open = open;
     }
 
     fn rules_section(&mut self, ui: &mut egui::Ui) {
@@ -1958,7 +2064,7 @@ impl App {
         } else {
             format!("{} rules ({} enabled), applied top to bottom", self.s.rules.len(), enabled)
         };
-        let mut open = self.open_rules;
+        let mut open = self.s.layout.rules_open;
         step_section(ui, "2", "Rename rules", &summary, &mut open, |ui| {
             self.presets_row(ui);
             ui.add_space(4.0);
@@ -2104,7 +2210,7 @@ impl App {
                 );
             });
         });
-        self.open_rules = open;
+        self.s.layout.rules_open = open;
     }
 
     fn presets_row(&mut self, ui: &mut egui::Ui) {
@@ -2166,18 +2272,19 @@ impl App {
 
     fn output_section(&mut self, ui: &mut egui::Ui) {
         let summary = if self.s.sort_into_folders {
-            format!("into “{}” folders, date: {}", self.s.folder_template, self.s.date.mode.label())
+            format!("into folders like “{}”, date: {}", tpl::example(&self.s.folder_template), self.s.date.mode.label())
         } else {
             "off — files stay in their folders (rename only)".to_string()
         };
-        let mut open = self.open_output;
+        let mut open = self.s.layout.output_open;
         step_section(ui, "3", "Output folder", &summary, &mut open, |ui| {
-            ui.checkbox(&mut self.s.sort_into_folders, RichText::new("Sort into “Month YYYY” folders").strong())
-                .on_hover_text("Off: only rename files where they are; no folders are created.");
-            ui.add_enabled_ui(self.s.sort_into_folders, |ui| {
-                egui::Grid::new("opts").num_columns(4).spacing([10.0, 8.0]).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut self.s.sort_into_folders, RichText::new("Sort into date folders").strong())
+                    .on_hover_text("Off: only rename files where they are; no folders are created.");
+                ui.add_enabled_ui(self.s.sort_into_folders, |ui| {
+                    ui.separator();
                     ui.label("Date source");
-                    egui::ComboBox::from_id_salt("mode").width(220.0).selected_text(self.s.date.mode.label()).show_ui(
+                    egui::ComboBox::from_id_salt("mode").width(200.0).selected_text(self.s.date.mode.label()).show_ui(
                         ui,
                         |ui| {
                             for m in [
@@ -2191,51 +2298,235 @@ impl App {
                             }
                         },
                     );
-                    ui.label("If no date found");
-                    egui::ComboBox::from_id_salt("fallback")
-                        .width(180.0)
-                        .selected_text(self.s.date.fallback.label())
-                        .show_ui(ui, |ui| {
-                            for f in [Fallback::Modified, Fallback::Created, Fallback::Skip] {
-                                ui.selectable_value(&mut self.s.date.fallback, f, f.label());
-                            }
-                        });
-                    ui.end_row();
-
-                    ui.label("Folder name");
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.s.folder_template).desired_width(140.0))
-                            .on_hover_text("Tokens: {MMMM} {MMM} {MM} {M} {YYYY} {YY} {DD}");
-                        let example = format_folder_name(&self.s.folder_template, chrono::Local::now().date_naive());
-                        ui.label(RichText::new(format!("e.g. “{example}”")).weak().small());
-                    });
-                    ui.label("Ambiguous dates")
-                        .on_hover_text("For names like 03-04-2024 where both numbers could be the month.");
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut self.s.date.order, DateOrder::Us, "US (MM-DD)");
-                        ui.radio_value(&mut self.s.date.order, DateOrder::Intl, "Intl (DD-MM)");
-                    });
-                    ui.end_row();
                 });
             });
-            if self.s.date.mode == DateMode::Auto {
-                ui.horizontal(|ui| {
-                    let order = order_summary(&self.order_ui);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("Auto priority: {order}  (change in Tools > Options)")).weak(),
-                        )
-                        .truncate(),
-                    )
-                    .on_hover_text("First match wins; also used by “Insert date”.");
-                    if ui.small_button("Options…").on_hover_text("Edit the Auto priority (Tools > Options)").clicked()
+            ui.add_enabled_ui(self.s.sort_into_folders, |ui| {
+                self.folder_name_builder(ui);
+                let id = ui.make_persistent_id(("output-more", self.layout_gen));
+                let more_open = self.s.layout.output_more_open;
+                let r = egui::CollapsingHeader::new(RichText::new("More options").small())
+                    .id_salt(id)
+                    .open(Some(more_open))
+                    .show(ui, |ui| {
+                        egui::Grid::new("more-opts").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                            ui.label("If no date found");
+                            egui::ComboBox::from_id_salt("fallback")
+                                .width(180.0)
+                                .selected_text(self.s.date.fallback.label())
+                                .show_ui(ui, |ui| {
+                                    for f in [Fallback::Modified, Fallback::Created, Fallback::Skip] {
+                                        ui.selectable_value(&mut self.s.date.fallback, f, f.label());
+                                    }
+                                });
+                            ui.end_row();
+                            ui.label("Ambiguous dates")
+                                .on_hover_text("For names like 03-04-2024 where both numbers could be the month.");
+                            ui.horizontal(|ui| {
+                                ui.radio_value(&mut self.s.date.order, DateOrder::Us, "US (MM-DD)");
+                                ui.radio_value(&mut self.s.date.order, DateOrder::Intl, "Intl (DD-MM)");
+                            });
+                            ui.end_row();
+                        });
+                        if self.s.date.mode == DateMode::Auto {
+                            ui.horizontal(|ui| {
+                                let order = order_summary(&self.order_ui);
+                                ui.add(
+                                    egui::Label::new(RichText::new(format!("Auto priority: {order}")).weak())
+                                        .truncate(),
+                                )
+                                .on_hover_text("First match wins; also used by “Insert date”.");
+                                if ui
+                                    .small_button("Options…")
+                                    .on_hover_text("Edit the Auto priority (Tools > Options)")
+                                    .clicked()
+                                {
+                                    self.open_options();
+                                }
+                            });
+                        }
+                    });
+                if r.header_response.clicked() {
+                    self.s.layout.output_more_open = !more_open;
+                }
+            });
+        });
+        self.s.layout.output_open = open;
+    }
+
+    /// "Folder name": ready-made layouts, "Build your own" controls and the
+    /// raw template ("Advanced"), all editing `folder_template`.
+    fn folder_name_builder(&mut self, ui: &mut egui::Ui) {
+        let template = self.s.folder_template.clone();
+        let matched = FolderBuilder::from_template(&template);
+        // Re-sync the controls only when the template changed elsewhere
+        // (layout list, Advanced field, preset, New Project), so a custom
+        // separator being typed is not overwritten mid-edit.
+        if template != self.builder_synced {
+            self.builder_synced = template.clone();
+            if let Some(b) = &matched {
+                self.builder = b.clone();
+                self.sep_custom = matches!(b.sep, Separator::Custom(_));
+                if let Separator::Custom(t) = &b.sep {
+                    self.custom_sep = t.clone();
+                }
+            }
+        }
+        let layout_idx = tpl::LAYOUTS.iter().position(|(t, _)| *t == template);
+        // a hand-typed template that fits the controls shows them
+        if layout_idx.is_none() && matched.is_some() {
+            self.folder_build = true;
+        }
+        let custom = layout_idx.is_none() && matched.is_none();
+        let selected = if custom {
+            "Custom template".to_string()
+        } else if self.folder_build {
+            "Build your own…".to_string()
+        } else {
+            let (t, note) = tpl::LAYOUTS[layout_idx.unwrap_or(0)];
+            format!("{}   ({note})", tpl::example(t))
+        };
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Folder name");
+            egui::ComboBox::from_id_salt("folder-layout").width(300.0).height(900.0).selected_text(selected).show_ui(
+                ui,
+                |ui| {
+                    for (t, note) in tpl::LAYOUTS {
+                        let on = !self.folder_build && layout_idx.is_some_and(|i| tpl::LAYOUTS[i].0 == t);
+                        let text = format!("{}   ({note})", tpl::example(t));
+                        if ui.selectable_label(on, text).on_hover_text(t).clicked() {
+                            self.s.folder_template = t.to_string();
+                            self.folder_build = false;
+                        }
+                    }
+                    ui.separator();
+                    if ui
+                        .selectable_label(self.folder_build && !custom, "Build your own…")
+                        .on_hover_text("Pick year / month / day style, order and separator")
+                        .clicked()
                     {
-                        self.open_options();
+                        self.folder_build = true;
+                        if matched.is_none() {
+                            self.s.folder_template = self.builder.to_template();
+                        }
+                    }
+                    if custom {
+                        let _ = ui.selectable_label(true, "Custom template (typed)");
+                    }
+                },
+            );
+            ui.label(RichText::new("Example:").weak());
+            ui.label(RichText::new(tpl::example(&self.s.folder_template)).strong().color(accent(ui)))
+                .on_hover_text("Folder for a photo taken on 5 March 2024");
+            ui.toggle_value(&mut self.s.layout.folder_advanced, "Advanced")
+                .on_hover_text("Show the template text, e.g. {MMMM} {YYYY}");
+        });
+
+        if self.folder_build || custom {
+            let mut b = self.builder.clone();
+            if self.sep_custom {
+                b.sep = Separator::Custom(self.custom_sep.clone());
+            }
+            let before = b.clone();
+            let mut custom_sep_edit = false;
+            ui.horizontal_wrapped(|ui| {
+                if custom {
+                    ui.label(RichText::new("Custom — changing a control replaces it:").weak().small());
+                }
+                ui.label("Year");
+                egui::ComboBox::from_id_salt("b-year").selected_text(year_label(b.year)).show_ui(ui, |ui| {
+                    for y in YearStyle::ALL {
+                        ui.selectable_value(&mut b.year, y, year_label(y));
                     }
                 });
+                ui.label("Month");
+                egui::ComboBox::from_id_salt("b-month").selected_text(month_label(b.month)).show_ui(ui, |ui| {
+                    for m in MonthStyle::ALL {
+                        ui.selectable_value(&mut b.month, m, month_label(m));
+                    }
+                });
+                ui.checkbox(&mut b.day, "Day");
+                egui::ComboBox::from_id_salt("b-order")
+                    .selected_text(order_label(b.order))
+                    .show_ui(ui, |ui| {
+                        for o in [PartOrder::MonthFirst, PartOrder::YearFirst] {
+                            ui.selectable_value(&mut b.order, o, order_label(o));
+                        }
+                    })
+                    .response
+                    .on_hover_text("Order of the parts (the day always follows the month)");
+                ui.label("Separator");
+                let is_custom = matches!(b.sep, Separator::Custom(_));
+                egui::ComboBox::from_id_salt("b-sep").height(400.0).selected_text(b.sep.label()).show_ui(ui, |ui| {
+                    for sep in Separator::FIXED {
+                        let label = sep.label();
+                        if ui.selectable_label(!is_custom && b.sep == sep, label).clicked() {
+                            b.sep = sep;
+                            self.sep_custom = false;
+                        }
+                    }
+                    if ui.selectable_label(is_custom, "Custom…").clicked() {
+                        b.sep = Separator::Custom(self.custom_sep.clone());
+                        self.sep_custom = true;
+                    }
+                });
+                if matches!(b.sep, Separator::Custom(_)) {
+                    let r = ui.add(
+                        egui::TextEdit::singleline(&mut self.custom_sep)
+                            .id_salt("custom-sep-text")
+                            .desired_width(48.0)
+                            .char_limit(5),
+                    );
+                    if r.changed() {
+                        custom_sep_edit = true;
+                        b.sep = Separator::Custom(self.custom_sep.clone());
+                    }
+                    if !tpl::valid_custom_separator(&self.custom_sep) {
+                        ui.label(RichText::new("1–5 characters, not \\ / : * ? \" < > | { }").color(red()).small());
+                    }
+                }
+            });
+            if b != before || custom_sep_edit {
+                let ok = match &b.sep {
+                    Separator::Custom(t) => tpl::valid_custom_separator(t),
+                    _ => true,
+                };
+                if ok {
+                    self.s.folder_template = b.to_template();
+                    self.builder_synced = self.s.folder_template.clone();
+                    self.folder_build = true;
+                }
+                self.builder = b;
             }
-        });
-        self.open_output = open;
+        }
+
+        if self.s.layout.folder_advanced {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Template");
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut self.s.folder_template)
+                        .id_salt("folder-template-text")
+                        .desired_width(220.0)
+                        .font(TextStyle::Monospace)
+                        .hint_text(tpl::DEFAULT_TEMPLATE),
+                );
+                if r.changed() {
+                    // matches a ready-made layout -> show that; else the
+                    // controls follow if they can express it ("Custom" if not)
+                    let t = self.s.folder_template.clone();
+                    if tpl::LAYOUTS.iter().any(|(l, _)| *l == t) {
+                        self.folder_build = false;
+                    } else if FolderBuilder::from_template(&t).is_some() {
+                        self.folder_build = true;
+                    }
+                }
+                ui.label(RichText::new(tpl::TOKEN_LEGEND).weak().small());
+            });
+        }
+
+        for w in tpl::check_template(&self.s.folder_template) {
+            ui.label(RichText::new(format!("⚠ {w}")).color(amber()).small());
+        }
     }
 
     // ----- step 4: live preview -----
@@ -2336,32 +2627,44 @@ impl App {
         };
         let view = &self.view;
         let fs = self.s.font_size;
+        let saved = self.s.layout.files_columns.clone();
+        let w = |i: usize, d: f32| saved.get(i).copied().filter(|_| saved.len() == 6).unwrap_or(d);
+        // left edges of the 8 header cells -> widths of the 6 resizable columns
+        let mut lefts = [0.0f32; 8];
         TableBuilder::new(ui)
-            .id_salt("files")
+            .id_salt(("files", self.layout_gen))
             .striped(true)
             .resizable(true)
             .cell_layout(Layout::left_to_right(Align::Center))
             .column(Column::exact(44.0))
-            .column(Column::initial(fs * 13.0).at_least(80.0).clip(true))
-            .column(Column::initial(fs * 17.0).at_least(80.0).clip(true))
-            .column(Column::initial(fs * 8.0).at_least(60.0).clip(true))
-            .column(Column::initial(fs * 11.0).at_least(70.0).clip(true))
-            .column(Column::initial(fs * 7.5).at_least(60.0).clip(true))
-            .column(Column::initial(fs * 7.0).at_least(60.0).clip(true))
+            .column(Column::initial(w(0, fs * 13.0)).at_least(80.0).clip(true))
+            .column(Column::initial(w(1, fs * 17.0)).at_least(80.0).clip(true))
+            .column(Column::initial(w(2, fs * 8.0)).at_least(60.0).clip(true))
+            .column(Column::initial(w(3, fs * 11.0)).at_least(70.0).clip(true))
+            .column(Column::initial(w(4, fs * 7.5)).at_least(60.0).clip(true))
+            .column(Column::initial(w(5, fs * 7.0)).at_least(60.0).clip(true))
             .column(Column::remainder().at_least(60.0).clip(true))
             .header(row_h + 4.0, |mut h| {
-                h.col(|ui| {
-                    ui.label(RichText::new("#").strong());
-                });
-                h.col(|ui| header(ui, SortCol::File, "Before (current name)", &mut clicked));
-                h.col(|ui| header(ui, SortCol::NewName, "After (new name)", &mut clicked));
-                h.col(|ui| header(ui, SortCol::Current, "Current folder", &mut clicked));
-                h.col(|ui| header(ui, SortCol::Dest, "Destination folder", &mut clicked));
-                h.col(|ui| header(ui, SortCol::Date, "Date used", &mut clicked));
-                h.col(|ui| header(ui, SortCol::Status, "Action", &mut clicked));
-                h.col(|ui| {
-                    ui.label(RichText::new("Notes").strong());
-                });
+                lefts[0] = h
+                    .col(|ui| {
+                        ui.label(RichText::new("#").strong());
+                    })
+                    .1
+                    .rect
+                    .left();
+                lefts[1] = h.col(|ui| header(ui, SortCol::File, "Before (current name)", &mut clicked)).1.rect.left();
+                lefts[2] = h.col(|ui| header(ui, SortCol::NewName, "After (new name)", &mut clicked)).1.rect.left();
+                lefts[3] = h.col(|ui| header(ui, SortCol::Current, "Current folder", &mut clicked)).1.rect.left();
+                lefts[4] = h.col(|ui| header(ui, SortCol::Dest, "Destination folder", &mut clicked)).1.rect.left();
+                lefts[5] = h.col(|ui| header(ui, SortCol::Date, "Date used", &mut clicked)).1.rect.left();
+                lefts[6] = h.col(|ui| header(ui, SortCol::Status, "Action", &mut clicked)).1.rect.left();
+                lefts[7] = h
+                    .col(|ui| {
+                        ui.label(RichText::new("Notes").strong());
+                    })
+                    .1
+                    .rect
+                    .left();
             })
             .body(|body| {
                 body.rows(row_h, view.len(), |mut row| {
@@ -2448,6 +2751,14 @@ impl App {
             self.sort = if self.sort.0 == c { (c, !self.sort.1) } else { (c, true) };
             self.view_dirty = true;
         }
+        let sp = ui.spacing().item_spacing.x;
+        let widths: Vec<f32> = (1..7).map(|i| lefts[i + 1] - lefts[i] - sp).collect();
+        if widths.iter().all(|w| *w >= 20.0) {
+            let v: Vec<f32> = widths.iter().map(|w| w.round()).collect();
+            if v != self.s.layout.files_columns {
+                self.s.layout.files_columns = v;
+            }
+        }
     }
 
     fn folders_tab(&mut self, ui: &mut egui::Ui) {
@@ -2459,24 +2770,39 @@ impl App {
         let rows = &self.folder_rows;
         ui.label(RichText::new(format!("{} destination folders", rows.len())).weak().small());
         let row_h = self.s.font_size + 10.0;
+        let saved = &self.s.layout.folders_columns;
+        let w = |i: usize, d: f32| saved.get(i).copied().filter(|_| saved.len() == 2).unwrap_or(d);
+        let mut lefts = [0.0f32; 3];
         TableBuilder::new(ui)
-            .id_salt("folders")
+            .id_salt(("folders", self.layout_gen))
             .striped(true)
             .resizable(true)
             .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::initial(460.0).at_least(120.0).clip(true))
-            .column(Column::initial(90.0))
+            .column(Column::initial(w(0, 460.0)).at_least(120.0).clip(true))
+            .column(Column::initial(w(1, 90.0)))
             .column(Column::remainder())
             .header(row_h + 4.0, |mut h| {
-                h.col(|ui| {
-                    ui.strong("Destination folder");
-                });
-                h.col(|ui| {
-                    ui.strong("Files");
-                });
-                h.col(|ui| {
-                    ui.strong("Folder");
-                });
+                lefts[0] = h
+                    .col(|ui| {
+                        ui.strong("Destination folder");
+                    })
+                    .1
+                    .rect
+                    .left();
+                lefts[1] = h
+                    .col(|ui| {
+                        ui.strong("Files");
+                    })
+                    .1
+                    .rect
+                    .left();
+                lefts[2] = h
+                    .col(|ui| {
+                        ui.strong("Folder");
+                    })
+                    .1
+                    .rect
+                    .left();
             })
             .body(|body| {
                 body.rows(row_h, rows.len(), |mut row| {
@@ -2496,6 +2822,14 @@ impl App {
                     });
                 });
             });
+        let sp = ui.spacing().item_spacing.x;
+        let widths = [lefts[1] - lefts[0] - sp, lefts[2] - lefts[1] - sp];
+        if widths.iter().all(|w| *w >= 20.0) {
+            let v: Vec<f32> = widths.iter().map(|w| w.round()).collect();
+            if v != self.s.layout.folders_columns {
+                self.s.layout.folders_columns = v;
+            }
+        }
     }
 
     fn results_tab(&mut self, ui: &mut egui::Ui) {
@@ -2646,10 +2980,45 @@ impl App {
         let current = OptionsDraft { extensions: self.s.extensions.clone(), order_ui: self.order_ui.clone() };
         let mut save = false;
         let mut close = false;
+        let mut reset_layout = false;
+        let mut theme = self.s.theme;
+        let mut font_size = self.s.font_size;
         let fs = self.s.font_size;
         let modal = egui::Modal::new(egui::Id::unique("photosorter-options")).show(ctx, |ui| {
             ui.set_width((fs * 40.0).min(ctx.content_rect().width() - 60.0));
             ui.heading("Options");
+            ui.add_space(6.0);
+
+            options_group(ui, "Appearance", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    for t in Theme::ALL {
+                        ui.radio_value(&mut theme, t, t.label()).on_hover_text(match t {
+                            Theme::System => "Use the Windows light/dark app colour setting",
+                            _ => "",
+                        });
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Text size");
+                    ui.add(egui::Slider::new(&mut font_size, 10.0..=28.0).step_by(1.0).suffix(" pt"));
+                });
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Reset window layout")
+                        .on_hover_text(
+                            "Default window size, centered, not maximized; default panel height, column widths \
+                             and expanded sections",
+                        )
+                        .clicked()
+                    {
+                        reset_layout = true;
+                    }
+                    ui.label(
+                        RichText::new("Appearance applies at once and is saved automatically.").weak().small(),
+                    );
+                });
+            });
             ui.add_space(6.0);
 
             options_group(ui, "File types", |ui| {
@@ -2729,6 +3098,12 @@ impl App {
                 }
             });
         });
+        // appearance is live (not part of the Save / Close draft)
+        self.s.theme = theme;
+        self.s.font_size = font_size.round().clamp(10.0, 28.0);
+        if reset_layout {
+            self.reset_layout(ctx);
+        }
         if save {
             self.s.extensions = draft.extensions.trim().to_string();
             self.order_ui = draft.order_ui;
@@ -3077,6 +3452,29 @@ fn options_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)
             ui.add_space(2.0);
             add(ui);
         });
+}
+
+fn year_label(y: YearStyle) -> &'static str {
+    match y {
+        YearStyle::Full => "2024",
+        YearStyle::Short => "24",
+    }
+}
+
+fn month_label(m: MonthStyle) -> &'static str {
+    match m {
+        MonthStyle::Name => "March",
+        MonthStyle::Short => "Mar",
+        MonthStyle::Num2 => "03",
+        MonthStyle::Num => "3",
+    }
+}
+
+fn order_label(o: PartOrder) -> &'static str {
+    match o {
+        PartOrder::MonthFirst => "Month first",
+        PartOrder::YearFirst => "Year first",
+    }
 }
 
 /// "Filename > EXIF / video > Modified" (enabled sources in order).

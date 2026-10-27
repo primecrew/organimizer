@@ -1,10 +1,10 @@
-# PhotoSorter 2.0.2
+# PhotoSorter 2.0.3
 
 Portable Windows 10/11 GUI (Rust + eframe/egui) that renames images and
 videos with an ordered, ReNamer-style rule list and then (optionally) moves
 them into `Month YYYY` subfolders inside each file's own folder — with a live
 preview, collision-safe moves and a JSON undo log. End-user docs:
-`dist/v2.0.2/README.txt` (shipped as `README.txt` in the zip). v1 docs:
+`dist/v2.0.3/README.txt` (shipped as `README.txt` in the zip). v1 docs:
 `dist/README.txt`.
 
 ## Window layout (top to bottom) and why
@@ -18,8 +18,12 @@ preview, collision-safe moves and a JSON undo log. End-user docs:
    summary ("File types: 26 image & video types") + "Options…" button.
 2. **Rename rules** – ReNamer-style list: checkbox per rule, ⏶/⏷ reorder,
    duplicate, delete, ✏ inline editor, "➕ Add rule" menu, presets row.
-3. **Output folder** – "Sort into Month YYYY folders" toggle, date source,
-   fallback, template; with Auto a one-line priority summary + "Options…".
+3. **Output folder** – "Sort into date folders" toggle + date source; a
+   folder-name builder (ready-made layouts with a live example, "Build your
+   own…" Year / Month / Day / order / separator controls, and an "Advanced"
+   raw template field with a token legend, kept in sync; inline warnings);
+   fallback, ambiguous dates and the Auto priority summary under "More
+   options".
 4. **Live preview** – Before / After name, current and destination folder,
    date, action and notes (validation warnings); "By destination" and
    "Results / errors" tabs.
@@ -34,6 +38,16 @@ enabled when the preview is current and no rule has an error.
 Rarely-changed settings (the 26-entry extension list and the Auto priority
 editor) live in Tools > Options since 2.0.2 to keep the main window short.
 
+Since 2.0.3 the window remembers its position, size, maximized state, the
+height of the top panel, the preview column widths and which sections are
+collapsed (`[Window]` in `PhotoSorter.ini`; saved on exit and ~1.5 s after a
+change, clamped on restore so it is never off-screen or tiny). Tools >
+Options > Appearance has Dark / Light / Follow system, text size and "Reset
+window layout"; the ☀/🌙 icon in the top bar stays as a quick toggle.
+Folder templates may contain `{/}` to make nested folders such as
+`{YYYY}{/}{MM} {MMMM}` → `2024\03 March`; each level is sanitised on its own
+and every created level is recorded in the undo log.
+
 ## Code layout
 
 | Path | Purpose |
@@ -42,13 +56,14 @@ editor) live in Tools > Options since 2.0.2 to keep the main window short.
 | `src/scan.rs` | folder walk (no symlink following), media-only extension allowlist |
 | `src/filename_date.rs` | smart filename date parser |
 | `src/date_source.rs` | Filename / EXIF (+ MP4/MOV creation time) / Modified / Created, Auto priority, fallback |
-| `src/template.rs` | folder template `{MMMM} {YYYY}`, "already sorted" detection |
+| `src/template.rs` | folder template `{MMMM} {YYYY}` (+ `{/}` nested levels), ready-made layouts, builder ⇄ template mapping, warnings, "already sorted" detection |
 | `src/rename.rs` | rename rules (`RuleSpec` data + compiled `Box<dyn RenameRule>`), INI encoding, Windows name validation/sanitising |
 | `src/plan.rs` | pipeline `RenameStage` (rules) → `FolderStage` (Month YYYY); collision resolution incl. same-batch renames |
 | `src/ops.rs` | apply (rename, case-only rename, copy+verify+delete across volumes), undo log written first, undo |
 | `src/settings.rs` | commented `PhotoSorter.ini` beside the exe incl. `[Rules]` and `[Preset:Name]` (+ `scope`), preset duplicate/rename/validate, atomic save with `.bak` |
+| `src/window_state.rs` | `[Window]` layout values: parse, validate and clamp the restored placement to the monitors' work areas |
 | `src/session.rs` | File > New Project reset + confirmation reasons, preset summaries |
-| `src/desktop.rs` | open README.txt / folders with the default app (`ShellExecuteW`, no shell) |
+| `src/desktop.rs` | open README.txt / folders with the default app (`ShellExecuteW`, no shell), monitor work areas |
 | `src/gui.rs`, `src/main.rs` | egui front-end, background worker, debounced live preview |
 | `examples/e2e.rs` | headless driver used for end-to-end tests (not shipped) |
 

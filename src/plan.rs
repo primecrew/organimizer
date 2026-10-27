@@ -22,7 +22,7 @@ use crate::date_source::{DateConfig, ResolvedDate, resolve_date};
 use crate::rename::{
     MAX_PATH_UTF16, NameParts, RenameRule, RuleContext, RuleSpec, compile_rules, sanitize_file_name, utf16_len,
 };
-use crate::template::{DEFAULT_TEMPLATE, format_folder_name, is_sorted_folder_name};
+use crate::template::{DEFAULT_TEMPLATE, format_folder_parts, sorted_levels};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Status {
@@ -253,13 +253,21 @@ impl Stage for FolderStage {
             item.status = Status::NoDate;
             return;
         };
-        let folder = format_folder_name(&ctx.options.template, date.date);
-        item.dest_dir = item.base_dir.join(&folder);
+        // One or more sanitised levels (`{/}` = subfolder); every part is a
+        // plain name, so the destination always stays below `base_dir`.
+        let parts = format_folder_parts(&ctx.options.template, date.date);
+        let mut dest = item.base_dir.clone();
+        for p in &parts {
+            debug_assert!(p != "." && p != ".." && !p.contains(['/', '\\']));
+            dest.push(p);
+        }
+        item.dest_dir = dest;
         // Already in the right folder? (case-insensitive like Windows)
-        let cur_name = item.current_dir.file_name().map(|n| n.to_string_lossy().to_lowercase());
-        if item.current_dir.parent() == Some(item.base_dir.as_path())
-            && cur_name.as_deref() == Some(&folder.to_lowercase())
-        {
+        let in_place = item.current_dir.strip_prefix(&item.base_dir).ok().is_some_and(|rel| {
+            let cur: Vec<String> = rel.components().map(|c| c.as_os_str().to_string_lossy().to_lowercase()).collect();
+            cur.len() == parts.len() && cur.iter().zip(&parts).all(|(a, b)| *a == b.to_lowercase())
+        });
+        if in_place {
             if item.new_name == item.original_name() {
                 item.status = Status::AlreadySorted;
             } else {
@@ -267,7 +275,7 @@ impl Stage for FolderStage {
                 item.dest_dir = item.current_dir.clone();
             }
         }
-        item.dest_folder_name = folder;
+        item.dest_folder_name = parts.join(std::path::MAIN_SEPARATOR_STR);
     }
 }
 
@@ -414,7 +422,7 @@ pub fn build_plan(
     progress: &mut dyn FnMut(usize, usize),
 ) -> Plan {
     let ctx = StageContext { root, options };
-    let mut sorted_cache: HashMap<PathBuf, bool> = HashMap::new();
+    let mut sorted_cache: HashMap<PathBuf, usize> = HashMap::new();
     let mut reserved: HashSet<String> = HashSet::new();
     let mut items = Vec::with_capacity(files.len());
 
@@ -429,15 +437,21 @@ pub fn build_plan(
 
         // If the file already sits in a "Month YYYY"-style folder below the
         // root, its siblings-folders live in the grandparent.
+        // With a nested template ({/}) the sorted levels are e.g. "2024\March"
+        // (or just "2024") and the base is that many levels up.
         if item.current_dir != root && item.current_dir.starts_with(root) {
-            let is_sorted = *sorted_cache.entry(item.current_dir.clone()).or_insert_with(|| {
-                item.current_dir
-                    .file_name()
-                    .map(|n| is_sorted_folder_name(&options.template, &n.to_string_lossy()))
-                    .unwrap_or(false)
+            let levels = *sorted_cache.entry(item.current_dir.clone()).or_insert_with(|| {
+                let rel: Vec<String> = item
+                    .current_dir
+                    .strip_prefix(root)
+                    .map(|r| r.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect())
+                    .unwrap_or_default();
+                sorted_levels(&options.template, &rel)
             });
-            if is_sorted && let Some(gp) = item.current_dir.parent() {
-                item.base_dir = gp.to_path_buf();
+            if levels > 0
+                && let Some(base) = item.current_dir.ancestors().nth(levels)
+            {
+                item.base_dir = base.to_path_buf();
             }
         }
 

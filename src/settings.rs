@@ -17,6 +17,7 @@ use crate::filename_date::DateOrder;
 use crate::rename::RuleSpec;
 use crate::scan::DEFAULT_EXTENSIONS;
 use crate::template::DEFAULT_TEMPLATE;
+use crate::window_state::{WindowLayout, format_widths, parse_num, parse_widths};
 
 pub const INI_NAME: &str = "PhotoSorter.ini";
 
@@ -24,6 +25,37 @@ pub const INI_NAME: &str = "PhotoSorter.ini";
 pub enum Theme {
     Dark,
     Light,
+    /// Follow the Windows light/dark app setting (since 2.0.3).
+    System,
+}
+
+impl Theme {
+    pub const ALL: [Theme; 3] = [Theme::Dark, Theme::Light, Theme::System];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Theme::Dark => "dark",
+            Theme::Light => "light",
+            Theme::System => "system",
+        }
+    }
+
+    pub fn from_key(s: &str) -> Option<Theme> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "dark" => Some(Theme::Dark),
+            "light" => Some(Theme::Light),
+            "system" | "auto" => Some(Theme::System),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Theme::Dark => "Dark",
+            Theme::Light => "Light",
+            Theme::System => "Follow system",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -42,6 +74,9 @@ pub struct Settings {
     pub font_size: f32,
     pub window_width: f32,
     pub window_height: f32,
+    /// Window position, maximized state, panel height, column widths and
+    /// open/closed sections (`[Window]`, since 2.0.3).
+    pub layout: WindowLayout,
 }
 
 impl Default for Settings {
@@ -59,6 +94,7 @@ impl Default for Settings {
             font_size: 15.0,
             window_width: 1200.0,
             window_height: 800.0,
+            layout: WindowLayout::default(),
         }
     }
 }
@@ -302,12 +338,8 @@ impl Settings {
             s.presets.push(p);
         }
 
-        if let Some(v) = get("window", "theme") {
-            match v.trim().to_ascii_lowercase().as_str() {
-                "dark" => s.theme = Theme::Dark,
-                "light" => s.theme = Theme::Light,
-                _ => {}
-            }
+        if let Some(t) = get("window", "theme").and_then(Theme::from_key) {
+            s.theme = t;
         }
         if let Some(v) = get("window", "font_size").and_then(|v| parse_f32(v, 10.0, 28.0)) {
             s.font_size = v;
@@ -318,6 +350,23 @@ impl Settings {
         if let Some(v) = get("window", "height").and_then(|v| parse_f32(v, 420.0, 10000.0)) {
             s.window_height = v;
         }
+        // [Window] layout (2.0.3); missing / bad values keep the defaults
+        let l = &mut s.layout;
+        let x = get("window", "x").and_then(|v| parse_num(v, -100000.0, 100000.0));
+        let y = get("window", "y").and_then(|v| parse_num(v, -100000.0, 100000.0));
+        if x.is_some() && y.is_some() {
+            (l.x, l.y) = (x, y);
+        }
+        let flag = |key: &str, default: bool| get("window", key).and_then(parse_bool).unwrap_or(default);
+        l.maximized = flag("maximized", l.maximized);
+        l.setup_height = get("window", "setup_panel_height").and_then(|v| parse_num(v, 40.0, 5000.0));
+        l.files_columns = get("window", "files_columns").map(parse_widths).unwrap_or_default();
+        l.folders_columns = get("window", "folders_columns").map(parse_widths).unwrap_or_default();
+        l.source_open = flag("open_source", l.source_open);
+        l.rules_open = flag("open_rules", l.rules_open);
+        l.output_open = flag("open_output", l.output_open);
+        l.output_more_open = flag("open_output_more", l.output_more_open);
+        l.folder_advanced = flag("folder_advanced", l.folder_advanced);
         s
     }
 
@@ -461,10 +510,9 @@ impl Settings {
     /// Render the fully commented INI file.
     pub fn to_ini(&self) -> String {
         let order: Vec<&str> = self.date.auto_order.iter().map(|k| k.key()).collect();
-        let theme = match self.theme {
-            Theme::Dark => "dark",
-            Theme::Light => "light",
-        };
+        let theme = self.theme.key();
+        let l = &self.layout;
+        let opt = |v: Option<f32>| v.map(|v| format!("{}", v.round())).unwrap_or_default();
         let amb = match self.date.order {
             DateOrder::Us => "us",
             DateOrder::Intl => "intl",
@@ -548,7 +596,9 @@ fallback = {fallback}
 ;   {{MM}}   = 2-digit month (10)          {{M}}   = month (10, 9)
 ;   {{YYYY}} = 4-digit year (2026)         {{YY}}  = 2-digit year (26)
 ;   {{DD}}   = 2-digit day (05)
+;   {{/}}    = subfolder: {{YYYY}}{{/}}{{MMMM}} sorts into 2024\March (since 2.0.3)
 ; Characters not allowed in Windows names (\ / : * ? " < > |) become '_'.
+; The "Folder name" builder in the app writes this value for you.
 ; Default: {{MMMM}} {{YYYY}}
 folder_template = {template}
 
@@ -594,11 +644,12 @@ sort_into_month_folders = {sort}
 [Rules]
 {rules}
 ; ---------------------------------------------------------------------------
-; [Window] - appearance
+; [Window] - appearance and window layout (remembered on exit)
 ; ---------------------------------------------------------------------------
 [Window]
 
-; Colour theme. Allowed: dark / light. Default: dark
+; Colour theme. Allowed: dark / light / system (follow the Windows app
+; colour setting). Default: dark
 theme = {theme}
 
 ; Base font size in points. Allowed: 10 - 28. Default: 15
@@ -608,6 +659,43 @@ font_size = {font_size}
 ; Allowed: width 640 - 10000, height 420 - 10000. Default: 1200 x 800
 width = {w}
 height = {h}
+
+; Window position (top-left corner, logical pixels; may be negative on a
+; second monitor). Empty = centered. If the position is not on a connected
+; monitor at start-up the window is centered instead, and a size larger
+; than the monitor is shrunk to fit. Default: empty
+x = {x}
+; (y: see x above)
+y = {y}
+
+; Start maximized. Allowed: true / false. Default: false
+maximized = {maximized}
+
+; Height of the steps 1-3 panel above the preview, in pixels.
+; Empty = automatic. Allowed: 40 - 5000. Default: empty
+setup_panel_height = {setup_h}
+
+; Preview column widths in pixels, comma-separated (Files tab: Before,
+; After, Current folder, Destination, Date, Action; By destination tab:
+; Folder, Files). Empty or invalid = default widths. Default: empty
+files_columns = {files_cols}
+; (By destination tab)
+folders_columns = {folders_cols}
+
+; Which sections are expanded. Allowed: true / false.
+; 1. Source & filter. Default: true
+open_source = {source_open}
+; 2. Rename rules. Default: true
+open_rules = {rules_open}
+; 3. Output folder. Default: true
+open_output = {output_open}
+; "More options" in 3. Output folder. Default: false
+open_output_more = {output_more_open}
+; Show the raw folder name template ("Advanced"). Default: false
+folder_advanced = {folder_advanced}
+
+; Tools > Options > "Reset window layout" (or deleting the keys above)
+; restores the default window size, position and layout.
 
 ; ---------------------------------------------------------------------------
 ; Presets: [Preset:Name] sections, saved from the app. Each holds a whole
@@ -635,6 +723,17 @@ height = {h}
             font_size = self.font_size.round(),
             w = self.window_width.round(),
             h = self.window_height.round(),
+            x = if l.y.is_some() { opt(l.x) } else { String::new() },
+            y = if l.x.is_some() { opt(l.y) } else { String::new() },
+            maximized = l.maximized,
+            setup_h = opt(l.setup_height),
+            files_cols = format_widths(&l.files_columns),
+            folders_cols = format_widths(&l.folders_columns),
+            source_open = l.source_open,
+            rules_open = l.rules_open,
+            output_open = l.output_open,
+            output_more_open = l.output_more_open,
+            folder_advanced = l.folder_advanced,
         )
         .replace('\n', "\r\n") // Notepad-friendly line endings
     }
@@ -1059,5 +1158,75 @@ mod tests {
         let now = std::fs::read_to_string(&ini).unwrap();
         assert!(now.starts_with("; ====") && now.contains("[Preset:New one]"));
         assert_eq!(Settings::from_ini(&now), s);
+    }
+
+    #[test]
+    fn window_layout_and_theme_roundtrip_and_old_inis() {
+        // 2.0.2 INI (no layout keys) -> defaults, theme kept
+        let old = Settings { theme: Theme::Light, ..Settings::default() }.to_ini();
+        let old: String = old
+            .lines()
+            .filter(|l| {
+                let k = l.split('=').next().unwrap_or("").trim();
+                !matches!(
+                    k,
+                    "x" | "y"
+                        | "maximized"
+                        | "setup_panel_height"
+                        | "files_columns"
+                        | "folders_columns"
+                        | "open_source"
+                        | "open_rules"
+                        | "open_output"
+                        | "open_output_more"
+                        | "folder_advanced"
+                )
+            })
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let s = Settings::from_ini(&old);
+        assert_eq!(s.layout, WindowLayout::default());
+        assert_eq!(s.theme, Theme::Light);
+
+        let mut s = Settings::default();
+        s.theme = Theme::System;
+        s.window_width = 1333.0;
+        s.window_height = 777.0;
+        s.layout = WindowLayout {
+            x: Some(-1200.0),
+            y: Some(40.0),
+            maximized: true,
+            setup_height: Some(321.0),
+            files_columns: vec![150.0, 222.0, 90.0, 140.0, 100.0, 95.0],
+            folders_columns: vec![500.0, 80.0],
+            source_open: false,
+            rules_open: true,
+            output_open: false,
+            output_more_open: true,
+            folder_advanced: true,
+        };
+        let text = s.to_ini();
+        assert!(text.contains("theme = system\r\n"));
+        assert!(text.contains("files_columns = 150, 222, 90, 140, 100, 95\r\n"));
+        let back = Settings::from_ini(&text);
+        assert_eq!(back.layout, s.layout);
+        assert_eq!(back.theme, Theme::System);
+        assert_eq!((back.window_width, back.window_height), (1333.0, 777.0));
+
+        // garbage and half-set values fall back to defaults
+        let bad = "[Window]\ntheme = purple\nx = 100\ny =\nmaximized = maybe\nsetup_panel_height = 2\nfiles_columns = 1, 2, x\nopen_rules = no\n";
+        let b = Settings::from_ini(bad);
+        assert_eq!(b.theme, Theme::Dark);
+        assert_eq!((b.layout.x, b.layout.y), (None, None));
+        assert!(!b.layout.maximized);
+        assert_eq!(b.layout.setup_height, None);
+        assert!(b.layout.files_columns.is_empty());
+        assert!(!b.layout.rules_open);
+        assert!(b.layout.source_open);
+        assert!(Settings::from_ini("[Window]\ntheme = Auto\n").theme == Theme::System);
+
+        // an INI written by 2.0.3 still parses in the 2.0.2 reader's style
+        // (theme = system is unknown there and simply falls back to dark)
+        assert!(Settings::default().to_ini().contains("\r\n[Window]\r\n"));
     }
 }

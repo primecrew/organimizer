@@ -1,0 +1,3 @@
+Window 16777219
+  Position: 85,79 (screen: 0)
+  Geometry: 1480x1020

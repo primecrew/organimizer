@@ -1,6 +1,6 @@
 [package]
 name = "photo-sorter"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2024"
 description = "Portable tool that renames and sorts images and videos into 'Month YYYY' folders"
 license = "MIT"
@@ -31,8 +31,9 @@ rfd = { version = "0.17.2", optional = true }
 egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
-# ShellExecuteW for Help > README.txt and "Open ... Folder" (no shell / cmd).
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# ShellExecuteW for Help > README.txt and "Open ... Folder" (no shell / cmd);
+# EnumDisplayMonitors / GetDpiForMonitor to keep a restored window on screen.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_HiDpi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

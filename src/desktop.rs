@@ -7,6 +7,9 @@
 //! folders) - no `cmd /c start`, no command string, no parameters - and
 //! only after checking it is an existing absolute file / folder. Fallback:
 //! `notepad.exe <file>` / `explorer.exe <folder>` with one argument.
+//!
+//! [`monitor_work_areas`] lists the monitors (read-only) so a remembered
+//! window position can be checked before the window is created.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -88,6 +91,58 @@ pub fn open_folder(dir: &Path) -> io::Result<()> {
     #[cfg(not(windows))]
     {
         Command::new("xdg-open").arg(dir).spawn().map(|_| ())
+    }
+}
+
+/// Work areas of all connected monitors in logical pixels (physical / the
+/// monitor's DPI scale), primary first. Empty if unknown (non-Windows).
+pub fn monitor_work_areas() -> Vec<crate::window_state::MonitorRect> {
+    #[cfg(windows)]
+    {
+        use crate::window_state::MonitorRect;
+        use windows_sys::Win32::Foundation::{LPARAM, RECT};
+        use windows_sys::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
+        use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+        const MONITORINFOF_PRIMARY: u32 = 1;
+
+        unsafe extern "system" fn cb(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> windows_sys::core::BOOL {
+            // SAFETY: `data` is the &mut Vec passed to EnumDisplayMonitors
+            // below, alive for the whole (synchronous) enumeration.
+            let out = unsafe { &mut *(data as *mut Vec<(bool, MonitorRect)>) };
+            let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+            // SAFETY: valid monitor handle from the enumeration, sized struct.
+            if unsafe { GetMonitorInfoW(m, &mut info) } != 0 {
+                let (mut dx, mut dy) = (96u32, 96u32);
+                // SAFETY: plain out-parameters.
+                let ok = unsafe { GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) } == 0;
+                let scale = if ok && dx >= 48 { dx as f32 / 96.0 } else { 1.0 };
+                let r = info.rcWork;
+                out.push((
+                    info.dwFlags & MONITORINFOF_PRIMARY != 0,
+                    MonitorRect {
+                        x: r.left as f32 / scale,
+                        y: r.top as f32 / scale,
+                        w: (r.right - r.left) as f32 / scale,
+                        h: (r.bottom - r.top) as f32 / scale,
+                    },
+                ));
+            }
+            1
+        }
+
+        let mut list: Vec<(bool, MonitorRect)> = Vec::new();
+        // SAFETY: null HDC / clip rect enumerate every monitor; the callback
+        // only writes into `list`, which outlives the call.
+        unsafe {
+            EnumDisplayMonitors(std::ptr::null_mut(), std::ptr::null(), Some(cb), &mut list as *mut _ as LPARAM);
+        }
+        list.sort_by_key(|(primary, _)| !*primary);
+        list.into_iter().map(|(_, r)| r).collect()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
     }
 }
 
