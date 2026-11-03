@@ -12,3 +12,16 @@ dist/v2.0.2/*.exe
 dist/v2.0.3/*.exe
 !dist/v2.0.4/
 dist/v2.0.4/*.exe
+
+# secrets / local environment (never commit)
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+credentials*.json
+.venv/
+venv/
+__pycache__/
+node_modules/
