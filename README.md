@@ -1,11 +1,49 @@
 # PhotoSorter 2.0.4
 
-Portable Windows 10/11 GUI (Rust + eframe/egui) that renames images and
-videos with an ordered, ReNamer-style rule list and then (optionally) moves
-them into `Month YYYY` subfolders inside each file's own folder — with a live
-preview, collision-safe moves and a JSON undo log. End-user docs:
-`dist/v2.0.4/README.txt` (shipped as `README.txt` in the zip). v1 docs:
-`dist/README.txt`.
+PhotoSorter is a portable Windows 10/11 desktop app (Rust + eframe/egui, one
+exe, no installer) for tidying photo and video folders. It renames files with
+an ordered, ReNamer Pro-style rule list and then, optionally, moves them into
+date folders such as `March 2024` inside each file's own folder. Everything is
+shown in a live preview first, and the last run can be undone.
+
+## Features
+
+- **Rename rules** modelled on den4b ReNamer Pro: stack rules in order
+  (insert, delete, remove, replace, regex, serialize/number, case, clean up,
+  insert date, insert folder name and more), each with on/off, reorder,
+  duplicate and delete.
+- **Date folders**: `Month YYYY` by default, other ready-made layouts, a
+  folder-name builder, an Advanced template field, and nested folders
+  (`2024\03 March`). Dates come from filename, EXIF / video metadata,
+  modified or created time, in a configurable priority order.
+- **Live preview** of before/after names and destination folders; nothing
+  changes until you click Apply and confirm.
+- **Undo**: a JSON undo log is written before anything moves; Undo restores
+  the original names and locations and removes created folders.
+- **Collision safety**: never overwrites, never deletes; clashes (including
+  ones created by renames in the same batch) get ` (1)` suffixes; Windows
+  name rules (illegal characters, reserved names, trailing dots/spaces, path
+  length) are checked and flagged.
+- **Images and videos only**: png, jpg, jpeg, gif, bmp, webp, tif, tiff,
+  heic, heif, camera RAW (cr2, nef, arw, dng) and mp4, mov, m4v, avi, mkv,
+  wmv, webm, mpg, mpeg, mts, m2ts, 3gp. Other files (txt, pdf, xmp/json
+  sidecars...) are never touched. The list is editable in Tools > Options.
+- **Presets** for rule chains and folder options (load, save, manage,
+  duplicate, rename, delete).
+- **Menus and Options**: File / Presets / Tools / Help; theme (Dark, Light,
+  Follow system), file types and date priority live in Tools > Options.
+- **Portable settings** in a commented `PhotoSorter.ini` beside the exe (no
+  registry, no AppData), including **window memory** (position, size, column
+  widths, panel height, open sections).
+
+**Status:** the exe is not code-signed, so Windows SmartScreen will probably
+warn on first run (More info > Run anyway; compare the SHA-256 published with
+each release). It has been tested on Linux and under Wine only, not yet on a
+real Windows PC.
+
+End-user docs: `dist/v2.0.4/README.txt` (shipped as `README.txt` in the zip);
+v1 docs: `dist/README.txt`. Version history: [CHANGELOG.md](CHANGELOG.md).
+Test notes: `docs/v2/TEST-SUMMARY.md`.
 
 ## Window layout (top to bottom) and why
 
@@ -94,7 +132,7 @@ plus Insert date (plan / filename / EXIF / modified / created date with a
 strftime format), Insert folder name and Extension case. Not implemented:
 Pascal Script (runs code), User Input / Mapping (manual name lists).
 
-## Build (from Linux)
+## Build (cross-compile from Linux)
 
 ```sh
 rustup target add x86_64-pc-windows-gnu
@@ -109,3 +147,7 @@ cargo run --no-default-features --example e2e -- <folder> <PhotoSorter.ini> --pr
 
 `.cargo/config.toml` links statically (`+crt-static`, `-static`), so the exe
 only imports DLLs that ship with Windows.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4.

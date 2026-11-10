@@ -1,7 +1,8 @@
 #!/bin/bash
-# Builds the messy sample tree in $1 (default ./sample) from downloads.
+# Builds the messy sample tree in $1 (default ./sample) from the sample downloads
+# in $DOWNLOADS (default ./downloads).
 set -e
-D=./downloads
+D=$(realpath "${DOWNLOADS:-./downloads}")
 T=${1:-./sample}
 rm -rf "$T"; mkdir -p "$T"
 cd "$T"

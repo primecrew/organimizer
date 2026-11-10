@@ -10,7 +10,11 @@
   26 v2 defaults (images + RAW + video) instead of 9; a separate check keeps
   the 9 v1 defaults (`V1_DEFAULT_EXTENSIONS`).
 
-## Sample data (downloaded on the build box)
+## Sample data (downloaded on the Linux build machine)
+
+Note: absolute test paths in the recorded logs were replaced with the generic
+`C:\PhotoSorterTest\...`; screenshots show the Wine test folders (`Z:\...`).
+
 * 6 × picsum.photos JPEGs, 5 × Wikimedia Commons JPEGs with EXIF
   DateTimeOriginal (2005–2010, Canon PowerShot A520 category), 2 small MP4s
   (Big Buck Bunny 10 s from test-videos.co.uk with a QuickTime CreateDate set
