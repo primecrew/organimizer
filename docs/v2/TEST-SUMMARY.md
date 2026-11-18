@@ -175,3 +175,22 @@ GetDpiForMonitor) is unit-tested with synthetic monitor lists and was only
 run on Wine's single virtual monitor; "Follow system" was only seen with
 Wine's default (light) setting, not with a real Windows dark-mode switch;
 window decorations sizes are Wine/xfwm4's, not Windows 11's.
+
+## v2.0.5 (Help > About, header icon, HELP.md, GPL-3.0-or-later)
+* `cargo test --no-default-features`: **105 passed, 0 failed** on Linux and
+  as a Windows binary under Wine (103 earlier + 2 new: `find_help` prefers
+  HELP.md and falls back to README.txt; product / publisher / license
+  strings, `build.rs` version-resource literals and the bundled GPL text
+  are consistent).
+* Release exe built with `scripts/build-release.sh` (`--remap-path-prefix`);
+  `strings` finds no build-machine paths. Version resource: CompanyName
+  PrimeCrew Software, ProductName / FileDescription PhotoSorter, version
+  2.0.5; icon resources present (RT_ICON ×7, RT_GROUP_ICON).
+* GUI under Wine + Xvfb + xfwm4: header icon + name + version, Help >
+  About (64x64 icon, version, publisher, notes, "Licensed under GPL v3"),
+  Help (F1) from About opened HELP.md in Notepad, title-bar icon shown.
+  Screenshots: `screenshots/v2.0.5-main-window.png`,
+  `screenshots/v2.0.5-about.png`, `screenshots/v2.0.5-titlebar-icon.png`.
+* Not checked under Wine: which app real Windows uses for `.md` (Notepad
+  is the fallback when none is registered), Explorer's file-properties
+  Details tab.

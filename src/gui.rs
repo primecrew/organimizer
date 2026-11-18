@@ -8,9 +8,9 @@
 //! Rarely-changed settings (file types, Auto date priority) live in the
 //! Tools > Options window; the main window only shows a one-line summary.
 //!
-//! Menu bar: File (New Project, Open Folder, Undo Last Apply, Exit),
+//! Menu bar: File (New Project, Open Folder, Undo Last Run, Exit),
 //! Presets (Load, Save current, Manage Presets), Tools (Options, open the
-//! settings / undo-log folder), Help (README, About).
+//! settings / undo-log folder), Help (HELP.md / README, About).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -38,7 +38,7 @@ use photo_sorter::scan;
 use photo_sorter::settings::{self, Loaded, PresetScope, Settings, Theme};
 use photo_sorter::template::{self as tpl, FolderBuilder, MonthStyle, PartOrder, Separator, YearStyle};
 use photo_sorter::window_state::{self, WindowLayout};
-use photo_sorter::{desktop, session};
+use photo_sorter::{about, desktop, session};
 
 // ---------------------------------------------------------------------------
 // Background work
@@ -200,7 +200,7 @@ enum Dialog {
     NewProject(Vec<String>),
     SavePreset { name: String },
     DeletePreset(String),
-    ReadmeMissing(PathBuf),
+    HelpMissing(PathBuf),
     About,
     Message { title: String, text: String },
 }
@@ -291,6 +291,10 @@ pub struct App {
     undo_cache: (String, Option<PathBuf>),
     applied_theme: Option<Theme>,
     applied_font: f32,
+    /// App icon (same artwork as the exe icon) for the header and About.
+    icon_tex: egui::TextureHandle,
+    /// Automatic height of the steps 1–3 panel, decided on the first frame.
+    setup_default_h: Option<f32>,
 }
 
 impl App {
@@ -359,6 +363,8 @@ impl App {
             undo_cache: (String::from("\0"), None),
             applied_theme: None,
             applied_font: 0.0,
+            icon_tex: cc.egui_ctx.load_texture("app-icon", icon_image(), egui::TextureOptions::LINEAR),
+            setup_default_h: None,
             s,
         };
         app.saved_snapshot = app.layout_snapshot();
@@ -469,6 +475,7 @@ impl App {
         let p = window_state::restore_placement(None, [w, h], false, &photo_sorter::desktop::monitor_work_areas());
         (self.s.window_width, self.s.window_height) = (p.size[0], p.size[1]);
         self.layout_gen += 1;
+        self.setup_default_h = None;
         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(p.size[0], p.size[1])));
         if let Some(m) = photo_sorter::desktop::monitor_work_areas().first() {
@@ -696,11 +703,11 @@ impl App {
                 Msg::Planned { plan, scan, cancelled } => {
                     let c = plan.counts();
                     self.status = if cancelled {
-                        "Preview cancelled (partial results shown; Apply is disabled). Click “Refresh preview” to run it again.".into()
+                        "Preview canceled (partial results shown; Apply is disabled). Click “Refresh preview” to run it again.".into()
                     } else {
                         let moved = c.to_move - c.rename_only;
                         format!(
-                            "Preview: {} files in {} folders — {} renamed, {} moved to Month folders, {} unchanged/already sorted, {} without date. Nothing has been changed yet.",
+                            "Preview: {} files in {} folders — {} renamed, {} moved to date folders, {} unchanged/already sorted, {} without date. Nothing has been changed yet.",
                             c.total,
                             scan.dirs,
                             c.renamed,
@@ -745,7 +752,7 @@ impl App {
                         "Done: {} files renamed/moved, {} errors{}. {}",
                         rep.moved,
                         rep.errors.len(),
-                        if rep.cancelled { " (cancelled)" } else { "" },
+                        if rep.cancelled { " (canceled)" } else { "" },
                         rep.undo_log.as_ref().map(|p| format!("Undo log: {}", p.display())).unwrap_or_default()
                     );
                     self.run_report = Some(rep);
@@ -933,9 +940,16 @@ fn install_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+const ICON_RGBA: &[u8] = include_bytes!("../assets/icon64.rgba");
+
 /// Window icon (same artwork as the embedded .ico), 64x64 raw RGBA.
 pub fn app_icon() -> egui::IconData {
-    egui::IconData { rgba: include_bytes!("../assets/icon64.rgba").to_vec(), width: 64, height: 64 }
+    egui::IconData { rgba: ICON_RGBA.to_vec(), width: 64, height: 64 }
+}
+
+/// The same 64x64 icon as an image for the header and Help > About.
+fn icon_image() -> egui::ColorImage {
+    egui::ColorImage::from_rgba_unmultiplied([64, 64], ICON_RGBA)
 }
 
 fn status_text(it: &plan::PlanItem) -> String {
@@ -1613,14 +1627,19 @@ impl App {
                         ui.close();
                         self.request_new_project();
                     }
-                    if ui.add_enabled(!locked, egui::Button::new("Open Folder…").shortcut_text("Ctrl+O")).clicked() {
+                    if ui
+                        .add_enabled(!locked, egui::Button::new("Open Folder…").shortcut_text("Ctrl+O"))
+                        .on_hover_text("Choose the folder with your photos / videos")
+                        .clicked()
+                    {
                         ui.close();
                         self.browse_folder();
                     }
                     ui.separator();
                     let log = self.undo_log_for_root();
                     if ui
-                        .add_enabled(!locked && log.is_some(), egui::Button::new("Undo Last Apply…"))
+                        .add_enabled(!locked && log.is_some(), egui::Button::new("Undo Last Run…"))
+                        .on_hover_text("Restore the original names and folders of the last Apply (asks first)")
                         .on_disabled_hover_text("No undo log (PhotoSorter-undo-*.json) in the chosen folder")
                         .clicked()
                         && let Some(p) = log
@@ -1699,12 +1718,15 @@ impl App {
                     }
                 });
                 ui.menu_button("Help", |ui| {
-                    if ui.add(egui::Button::new("Help").shortcut_text("F1")).on_hover_text("Open README.txt").clicked()
+                    if ui
+                        .add(egui::Button::new("Help").shortcut_text("F1"))
+                        .on_hover_text(format!("Open {} (or {})", desktop::HELP_NAME, desktop::README_NAME))
+                        .clicked()
                     {
                         ui.close();
                         self.open_help();
                     }
-                    if ui.button("About PhotoSorter…").clicked() {
+                    if ui.button("About PhotoSorter…").on_hover_text("Version, publisher and build notes").clicked() {
                         ui.close();
                         self.dialog = Some(Dialog::About);
                     }
@@ -1739,20 +1761,21 @@ impl App {
 
     fn open_help(&mut self) {
         let Some(dir) = settings::exe_dir() else {
-            self.dialog = Some(Dialog::ReadmeMissing(PathBuf::from(desktop::README_NAME)));
+            self.dialog = Some(Dialog::HelpMissing(PathBuf::from(desktop::HELP_NAME)));
             return;
         };
-        match desktop::find_readme(&dir) {
+        match desktop::find_help(&dir) {
             Ok(p) => match desktop::open_text_file(&p) {
                 Ok(()) => self.status = format!("Opened {}", p.display()),
                 Err(e) => {
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     self.dialog = Some(Dialog::Message {
-                        title: "Cannot open README.txt".into(),
+                        title: format!("Cannot open {name}"),
                         text: format!("{}: {e}", p.display()),
                     })
                 }
             },
-            Err(p) => self.dialog = Some(Dialog::ReadmeMissing(p)),
+            Err(p) => self.dialog = Some(Dialog::HelpMissing(p)),
         }
     }
 
@@ -1843,13 +1866,21 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::top("top").show(ui, |ui| {
-            ui.add_space(6.0);
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("📷 PhotoSorter").heading().strong());
-                ui.label(
-                    RichText::new("rename & sort photos and videos — ReNamer-style rules, then “Month YYYY” folders")
-                        .weak(),
-                );
+                let side = (self.s.font_size * 2.6).clamp(32.0, 64.0);
+                ui.add(egui::Image::new(&self.icon_tex).fit_to_exact_size(Vec2::splat(side)))
+                    .on_hover_text(format!("{} by {}", about::title_with_version(), about::PUBLISHER));
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(about::PRODUCT).heading().strong());
+                        ui.label(RichText::new(format!("v{}", about::VERSION)).weak().small());
+                    });
+                    ui.label(
+                        RichText::new("Rename & sort photos and videos — ReNamer-style rules, then date folders")
+                            .weak(),
+                    );
+                });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // quick shortcut; Dark / Light / Follow system in Tools > Options
                     let (icon, tip, next) = if ui.visuals().dark_mode {
@@ -1868,7 +1899,7 @@ impl App {
                     }
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(2.0);
         });
     }
 
@@ -1994,7 +2025,11 @@ impl App {
     /// Steps 1–3 in a resizable, scrollable top area.
     fn setup_panel(&mut self, ui: &mut egui::Ui) {
         let fs = self.s.font_size;
-        let default_h = self.s.layout.setup_height.unwrap_or(fs * 29.0);
+        // Default (never dragged): at most ~half the window, so the preview
+        // table keeps room at the default 1200x800 size.
+        // fixed on the first frame so a later window resize is not taken for a drag.
+        let auto_h = *self.setup_default_h.get_or_insert_with(|| (fs * 29.0).min(ui.available_height() * 0.5));
+        let default_h = self.s.layout.setup_height.unwrap_or(auto_h);
         let panel =
             egui::Panel::top(("setup", self.layout_gen)).resizable(true).default_size(default_h).min_size(fs * 4.0);
         let r = panel.show(ui, |ui| {
@@ -2034,7 +2069,8 @@ impl App {
                     egui::TextEdit::singleline(&mut self.s.last_folder)
                         .hint_text("…or drop a folder here")
                         .desired_width(f32::INFINITY),
-                );
+                )
+                .on_hover_text("Folder to rename / sort; type or paste a path, or drag a folder onto the window");
             });
             if !self.s.folder_trimmed().is_empty() && !self.root().is_dir() {
                 ui.label(RichText::new("Folder does not exist").color(red()).small());
@@ -2199,7 +2235,7 @@ impl App {
                         }
                     }
                 });
-                if !self.s.rules.is_empty() && ui.button("Clear all").on_hover_text("Remove every rule").clicked() {
+                if !self.s.rules.is_empty() && ui.button("Clear all").on_hover_text("Remove every rule from the list (no files are touched)").clicked() {
                     self.s.rules.clear();
                     self.open_rule = None;
                 }
@@ -2248,7 +2284,11 @@ impl App {
                 let name = self.preset_sel.clone();
                 self.load_preset(&name);
             }
-            if ui.add_enabled(exists, egui::Button::new("Delete")).clicked() {
+            if ui
+                .add_enabled(exists, egui::Button::new("Delete"))
+                .on_hover_text("Delete this preset from PhotoSorter.ini (asks first; no photos or videos are touched)")
+                .clicked()
+            {
                 self.dialog = Some(Dialog::DeletePreset(self.preset_sel.clone()));
             }
             if ui.button("Manage…").on_hover_text("Presets > Manage Presets…").clicked() {
@@ -2282,10 +2322,16 @@ impl App {
         step_section(ui, "3", "Output folder", &summary, &mut open, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.checkbox(&mut self.s.sort_into_folders, RichText::new("Sort into date folders").strong())
-                    .on_hover_text("Off: only rename files where they are; no folders are created.");
+                    .on_hover_text(
+                        "On: move each file into a date folder (e.g. “March 2024”) next to it. \
+                         Off: only rename files where they are; no folders are created.",
+                    );
                 ui.add_enabled_ui(self.s.sort_into_folders, |ui| {
                     ui.separator();
-                    ui.label("Date source");
+                    ui.label("Date source").on_hover_text(
+                        "Which date decides the folder. Auto tries Filename, EXIF / video, Modified, Created \
+                         in the order set in Tools > Options.",
+                    );
                     egui::ComboBox::from_id_salt("mode").width(200.0).selected_text(self.s.date.mode.label()).show_ui(
                         ui,
                         |ui| {
@@ -2311,7 +2357,8 @@ impl App {
                     .open(Some(more_open))
                     .show(ui, |ui| {
                         egui::Grid::new("more-opts").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                            ui.label("If no date found");
+                            ui.label("If no date found")
+                                .on_hover_text("When the date source finds nothing; “Skip” leaves the file where it is.");
                             egui::ComboBox::from_id_salt("fallback")
                                 .width(180.0)
                                 .selected_text(self.s.date.fallback.label())
@@ -2850,7 +2897,7 @@ impl App {
                 });
                 if r.cancelled {
                     ui.label(
-                        RichText::new("Run was cancelled part-way; the changes done so far are in the undo log.")
+                        RichText::new("Run was canceled part-way; the changes done so far are in the undo log.")
                             .color(amber()),
                     );
                 }
@@ -2996,7 +3043,7 @@ impl App {
                     ui.label("Theme");
                     for t in Theme::ALL {
                         ui.radio_value(&mut theme, t, t.label()).on_hover_text(match t {
-                            Theme::System => "Use the Windows light/dark app colour setting",
+                            Theme::System => "Use the Windows light/dark app color setting",
                             _ => "",
                         });
                     }
@@ -3386,10 +3433,14 @@ impl App {
                         }
                     });
                 }
-                Dialog::ReadmeMissing(p) => {
-                    ui.heading("README.txt not found");
+                Dialog::HelpMissing(p) => {
+                    ui.heading("Help file not found");
                     ui.add_space(4.0);
-                    ui.label("The help file README.txt ships in the PhotoSorter zip and should sit next to PhotoSorter.exe:");
+                    ui.label(format!(
+                        "{} and {} ship in the PhotoSorter zip and should sit next to PhotoSorter.exe:",
+                        desktop::HELP_NAME,
+                        desktop::README_NAME
+                    ));
                     ui.label(RichText::new(p.display().to_string()).monospace().small());
                     ui.add_space(8.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -3397,7 +3448,7 @@ impl App {
                             keep = false;
                         }
                         if let Some(dir) = p.parent().filter(|d| d.is_dir()).map(Path::to_path_buf)
-                            && ui.button("Open program folder").clicked()
+                            && ui.button("Open Program Folder").clicked()
                         {
                             keep = false;
                             if let Err(e) = desktop::open_folder(&dir) {
@@ -3407,15 +3458,37 @@ impl App {
                     });
                 }
                 Dialog::About => {
-                    ui.heading(format!("PhotoSorter {}", env!("CARGO_PKG_VERSION")));
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Image::new(&self.icon_tex).fit_to_exact_size(Vec2::splat(64.0)));
+                        ui.add_space(8.0);
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(about::PRODUCT).size(fs * 1.8).strong());
+                            ui.label(RichText::new(format!("Version {}", about::VERSION)).strong());
+                            ui.label(RichText::new(about::PUBLISHER).color(accent(ui)));
+                        });
+                    });
+                    ui.add_space(8.0);
+                    ui.label(format!("{} on Windows 10/11.", about::DESCRIPTION));
                     ui.add_space(4.0);
-                    ui.label("Portable photo & video renamer / sorter for Windows 10/11.");
-                    ui.label("Unsigned build — Windows SmartScreen may warn on first run. MIT License.");
-                    ui.label(RichText::new("A fuller About page will come in a later version.").weak().small());
+                    ui.label(RichText::new(about::DISTRIBUTION_NOTE).weak());
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Only image and video files are touched. Preview before Apply, Undo after; \
+                                       nothing is ever overwritten or deleted.")
+                            .weak(),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(about::copyright()).small());
+                    ui.label(RichText::new(about::LICENSE_LINE).small())
+                        .on_hover_text("GNU General Public License v3.0 or later; full text in LICENSE next to the exe");
                     ui.add_space(8.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Close").clicked() {
                             keep = false;
+                        }
+                        if ui.button("Help (F1)").on_hover_text(format!("Open {}", desktop::HELP_NAME)).clicked() {
+                            keep = false;
+                            self.open_help();
                         }
                     });
                 }

@@ -1,10 +1,10 @@
-//! Opening the README / folders with the default Windows app, safely.
+//! Opening the help file / folders with the default Windows app, safely.
 //!
-//! Only paths PhotoSorter builds itself are opened: `README.txt` next to
-//! the exe, the exe's folder, or the folder that holds an undo log. On
+//! Only paths PhotoSorter builds itself are opened: `HELP.md` (or, if that
+//! is missing, `README.txt`) next to the exe, the exe's folder, or the folder that holds an undo log. On
 //! Windows the path goes to `ShellExecuteW(…, "open", path, NULL, …)`, which
-//! opens it with the registered default app (Notepad for .txt, Explorer for
-//! folders) - no `cmd /c start`, no command string, no parameters - and
+//! opens it with the registered default app (Notepad for .txt, whatever is
+//! registered for .md, Explorer for folders) - no `cmd /c start`, no command string, no parameters - and
 //! only after checking it is an existing absolute file / folder. Fallback:
 //! `notepad.exe <file>` / `explorer.exe <folder>` with one argument.
 //!
@@ -16,15 +16,27 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const README_NAME: &str = "README.txt";
+/// The help file shipped beside the exe (plain Markdown, readable in Notepad).
+pub const HELP_NAME: &str = "HELP.md";
 
-/// `README.txt` beside the exe if it exists as a regular file, otherwise
-/// `Err(expected_path)`.
-pub fn find_readme(exe_dir: &Path) -> Result<PathBuf, PathBuf> {
-    let p = exe_dir.join(README_NAME);
+fn regular_file(p: PathBuf) -> Result<PathBuf, PathBuf> {
     match std::fs::symlink_metadata(&p) {
         Ok(m) if m.is_file() => Ok(p),
         _ => Err(p),
     }
+}
+
+/// The file Help > Help (F1) opens: `HELP.md` beside the exe, or
+/// `README.txt` there if HELP.md is missing. `Err(HELP.md path)` when
+/// neither exists as a regular file.
+pub fn find_help(exe_dir: &Path) -> Result<PathBuf, PathBuf> {
+    regular_file(exe_dir.join(HELP_NAME)).or_else(|help| find_readme(exe_dir).map_err(|_| help))
+}
+
+/// `README.txt` beside the exe if it exists as a regular file, otherwise
+/// `Err(expected_path)`.
+pub fn find_readme(exe_dir: &Path) -> Result<PathBuf, PathBuf> {
+    regular_file(exe_dir.join(README_NAME))
 }
 
 #[cfg(windows)]
@@ -58,7 +70,8 @@ fn explorer() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("explorer.exe"))
 }
 
-/// Open an existing text file with its default app (Notepad fallback).
+/// Open an existing text file with its default app (Notepad fallback, e.g.
+/// when no app is registered for `.md`).
 pub fn open_text_file(path: &Path) -> io::Result<()> {
     if !path.is_absolute() || !path.is_file() {
         return Err(io::Error::new(io::ErrorKind::NotFound, format!("{} not found", path.display())));
@@ -163,5 +176,24 @@ mod tests {
         assert!(open_text_file(Path::new("README.txt")).is_err());
         assert!(open_text_file(&d.path().join("missing.txt")).is_err());
         assert!(open_folder(&d.path().join("nope")).is_err());
+    }
+
+    #[test]
+    fn help_prefers_help_md_and_falls_back_to_readme() {
+        let d = tempfile::tempdir().unwrap();
+        // neither file: the error names HELP.md (the file we ship)
+        assert_eq!(find_help(d.path()), Err(d.path().join("HELP.md")));
+        // only README.txt (e.g. an older zip): fall back to it
+        std::fs::write(d.path().join("README.txt"), b"readme").unwrap();
+        assert_eq!(find_help(d.path()), Ok(d.path().join("README.txt")));
+        // a folder named HELP.md is ignored
+        std::fs::create_dir(d.path().join("HELP.md")).unwrap();
+        assert_eq!(find_help(d.path()), Ok(d.path().join("README.txt")));
+        std::fs::remove_dir(d.path().join("HELP.md")).unwrap();
+        // HELP.md wins when present
+        std::fs::write(d.path().join("HELP.md"), b"# Help").unwrap();
+        assert_eq!(find_help(d.path()), Ok(d.path().join("HELP.md")));
+        std::fs::remove_file(d.path().join("README.txt")).unwrap();
+        assert_eq!(find_help(d.path()), Ok(d.path().join("HELP.md")));
     }
 }

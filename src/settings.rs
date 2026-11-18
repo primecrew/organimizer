@@ -652,8 +652,8 @@ sort_into_month_folders = {sort}
 ; ---------------------------------------------------------------------------
 [Window]
 
-; Colour theme. Allowed: dark / light / system (follow the Windows app
-; colour setting). Default: dark
+; Color theme. Allowed: dark / light / system (follow the Windows app
+; color setting). Default: dark
 theme = {theme}
 
 ; Base font size in points. Allowed: 10 - 28. Default: 15

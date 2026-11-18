@@ -20,8 +20,10 @@
 //! 6. [`window_state`] – parse/clamp the remembered window placement and
 //!    layout (`[Window]` section of the INI) so it never restores off-screen.
 //! 7. [`session`] (New Project, preset summaries) and [`desktop`] (open the
-//!    README / folders with the default app) back the menu bar.
+//!    help file / folders with the default app) back the menu bar;
+//!    [`about`] holds the product / publisher strings.
 
+pub mod about;
 pub mod date_source;
 pub mod desktop;
 pub mod filename_date;

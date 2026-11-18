@@ -1955,7 +1955,7 @@ impl RenameRule for ExtensionRule {
                     fam[0].to_string()
                 }
                 None => {
-                    name.warnings.push("Extension: file type not recognised, extension kept".into());
+                    name.warnings.push("Extension: file type not recognized, extension kept".into());
                     return;
                 }
             },

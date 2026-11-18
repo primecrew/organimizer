@@ -4,6 +4,24 @@ All versions are portable Windows 10/11 builds (one exe, no installer). None
 of them is code-signed, and so far they have been tested on Linux and under
 Wine only, not on a real Windows PC.
 
+## 2.0.5 (not released yet, 2026-11-18)
+- Help > About: app icon (64x64), version, publisher (PrimeCrew Software),
+  short description, portable / unsigned note, license line.
+- Main-window header now shows the app icon, name and version.
+- New `HELP.md` beside the exe (quick start + section stubs). Help (F1)
+  opens it, or `README.txt` if HELP.md is missing.
+- License is now GPL-3.0-or-later; `LICENSE` ships in the zip.
+- Exe version info: CompanyName PrimeCrew Software, ProductName and
+  FileDescription PhotoSorter, version 2.0.5. Release builds remap
+  build-machine paths (`scripts/build-release.sh`).
+- Wording: "Undo Last Run…" in the File menu (matches the Undo button),
+  "date folders" instead of "Month folders" in the preview summary, US
+  spelling (color, canceled, recognized), "Help file not found" dialog.
+- More hover help: Open Folder, Undo Last Run, folder path field, preset
+  Delete, Clear all, Sort into date folders, Date source, If no date found.
+- No change to how files are renamed, moved or undone. "Include subfolders"
+  stays off by default.
+
 ## 2.0.4 (git tag `v2.0.4`, 2026-10-27)
 - "Include subfolders" is now **off** by default on a fresh start (no INI);
   a missing or invalid `include_subfolders` value also means off.

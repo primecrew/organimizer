@@ -1,4 +1,6 @@
-# PhotoSorter 2.0.4
+# PhotoSorter 2.0.5
+
+By PrimeCrew Software.
 
 PhotoSorter is a portable Windows 10/11 desktop app (Rust + eframe/egui, one
 exe, no installer) for tidying photo and video folders. It renames files with
@@ -32,6 +34,8 @@ shown in a live preview first, and the last run can be undone.
   duplicate, rename, delete).
 - **Menus and Options**: File / Presets / Tools / Help; theme (Dark, Light,
   Follow system), file types and date priority live in Tools > Options.
+  Help (F1) opens `HELP.md` beside the exe (falls back to `README.txt`);
+  Help > About shows the icon, version, publisher and build notes.
 - **Portable settings** in a commented `PhotoSorter.ini` beside the exe (no
   registry, no AppData), including **window memory** (position, size, column
   widths, panel height, open sections).
@@ -41,17 +45,20 @@ warn on first run (More info > Run anyway; compare the SHA-256 published with
 each release). It has been tested on Linux and under Wine only, not yet on a
 real Windows PC.
 
-End-user docs: `dist/v2.0.4/README.txt` (shipped as `README.txt` in the zip);
+End-user docs: `dist/v2.0.5/README.txt` and `dist/v2.0.5/HELP.md` (shipped
+as `README.txt` and `HELP.md` in the zip, together with `LICENSE`);
 v1 docs: `dist/README.txt`. Version history: [CHANGELOG.md](CHANGELOG.md).
 Test notes: `docs/v2/TEST-SUMMARY.md`.
 
 ## Window layout (top to bottom) and why
 
-0. **Menu bar** – File (New Project Ctrl+N, Open Folder… Ctrl+O, Undo Last
-   Apply…, Exit), Presets (Load ▸, Save current as preset…, Manage
+0. **Header** – the app icon, "PhotoSorter", the version and a one-line
+   description, with the theme toggle and A−/A+ text size on the right.
+   **Menu bar** – File (New Project Ctrl+N, Open Folder… Ctrl+O, Undo Last
+   Run…, Exit), Presets (Load ▸, Save current as preset…, Manage
    Presets…), Tools (Options…: file types with "Reset to defaults" + Auto
-   date priority; Open Settings / Undo Log Folder), Help (F1 → README.txt
-   via `ShellExecuteW`, About).
+   date priority; Open Settings / Undo Log Folder), Help (F1 → HELP.md, or
+   README.txt if HELP.md is missing, via `ShellExecuteW`; About…).
 1. **Source & filter** – folder, include subfolders (off by default since
    2.0.4), one-line file-type
    summary ("File types: 26 image & video types") + "Options…" button.
@@ -116,7 +123,8 @@ current "Include subfolders" setting.
 | `src/settings.rs` | commented `PhotoSorter.ini` beside the exe incl. `[Rules]` and `[Preset:Name]` (+ `scope`), preset duplicate/rename/validate, atomic save with `.bak` |
 | `src/window_state.rs` | `[Window]` layout values: parse, validate and clamp the restored placement to the monitors' work areas |
 | `src/session.rs` | File > New Project reset + confirmation reasons, preset summaries |
-| `src/desktop.rs` | open README.txt / folders with the default app (`ShellExecuteW`, no shell), monitor work areas |
+| `src/about.rs` | product, publisher (PrimeCrew Software), version and license strings for About and the header |
+| `src/desktop.rs` | open HELP.md (or README.txt) / folders with the default app (`ShellExecuteW`, no shell), monitor work areas |
 | `src/gui.rs`, `src/main.rs` | egui front-end, background worker, debounced live preview |
 | `examples/e2e.rs` | headless driver used for end-to-end tests (not shipped) |
 
@@ -139,15 +147,23 @@ rustup target add x86_64-pc-windows-gnu
 sudo apt install gcc-mingw-w64-x86-64-posix        # linker + windres
 cargo test --no-default-features                    # core tests on Linux
 cargo build --release --target x86_64-pc-windows-gnu
+scripts/build-release.sh   # same, with --remap-path-prefix (used for releases)
 # run the core tests as a Windows binary under Wine
 CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine64 cargo test --no-default-features --target x86_64-pc-windows-gnu
 # headless end-to-end run with a preset from an INI
 cargo run --no-default-features --example e2e -- <folder> <PhotoSorter.ini> --preset "Name" [--apply] [--undo]
 ```
 
-`.cargo/config.toml` links statically (`+crt-static`, `-static`), so the exe
-only imports DLLs that ship with Windows.
+The release build links statically (`+crt-static`, `-static`; see
+`scripts/build-release.sh`), so the exe only imports DLLs that ship with
+Windows, and remaps build-machine paths so none end up in the exe. The
+version resource names PrimeCrew Software as the company.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4.
+See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4, 2.0.5.
+
+## License
+
+Copyright (C) 2026 PrimeCrew Software. Licensed under the GNU General Public License v3.0 or later. See LICENSE.
+
