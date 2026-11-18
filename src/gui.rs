@@ -201,6 +201,7 @@ enum Dialog {
     SavePreset { name: String },
     DeletePreset(String),
     HelpMissing(PathBuf),
+    ClearRules(usize),
     About,
     Message { title: String, text: String },
 }
@@ -517,6 +518,11 @@ impl App {
         let dir = if p.is_dir() { p.to_path_buf() } else { p.parent().map(Path::to_path_buf).unwrap_or_default() };
         self.s.last_folder = dir.to_string_lossy().into_owned();
         self.status = format!("Selected {}", dir.display());
+        // Browse / drop: fold step 1 to its one-line summary (folder shown
+        // there) so steps 2 and 3 fit without scrolling; click it to reopen.
+        if dir.is_dir() {
+            self.s.layout.source_open = false;
+        }
     }
 
     fn undo_log_for_root(&mut self) -> Option<PathBuf> {
@@ -1699,7 +1705,10 @@ impl App {
                     let settings_dir = self.ini_path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
                     if ui
                         .add_enabled(settings_dir.is_some(), egui::Button::new("Open Settings Folder"))
-                        .on_hover_text("The folder with PhotoSorter.exe and PhotoSorter.ini")
+                        .on_hover_text(match &self.ini_path {
+                            Some(p) => format!("The folder with {} ({})", settings::INI_NAME, p.display()),
+                            None => "Settings are not being saved".to_string(),
+                        })
                         .clicked()
                         && let Some(d) = settings_dir
                     {
@@ -1883,10 +1892,11 @@ impl App {
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // quick shortcut; Dark / Light / Follow system in Tools > Options
+                    // plain text: the ☀ / 🌙 glyphs do not render reliably
                     let (icon, tip, next) = if ui.visuals().dark_mode {
-                        ("☀", "Switch to the light theme (more in Tools > Options > Appearance)", Theme::Light)
+                        ("Light", "Switch to the light theme (more in Tools > Options > Appearance)", Theme::Light)
                     } else {
-                        ("🌙", "Switch to the dark theme (more in Tools > Options > Appearance)", Theme::Dark)
+                        ("Dark", "Switch to the dark theme (more in Tools > Options > Appearance)", Theme::Dark)
                     };
                     if ui.button(icon).on_hover_text(tip).clicked() {
                         self.s.theme = next;
@@ -2026,9 +2036,9 @@ impl App {
     fn setup_panel(&mut self, ui: &mut egui::Ui) {
         let fs = self.s.font_size;
         // Default (never dragged): at most ~half the window, so the preview
-        // table keeps room at the default 1200x800 size.
+        // table keeps room (default window 1280x900).
         // fixed on the first frame so a later window resize is not taken for a drag.
-        let auto_h = *self.setup_default_h.get_or_insert_with(|| (fs * 29.0).min(ui.available_height() * 0.5));
+        let auto_h = *self.setup_default_h.get_or_insert_with(|| (fs * 29.0).min(ui.available_height() * 0.55));
         let default_h = self.s.layout.setup_height.unwrap_or(auto_h);
         let panel =
             egui::Panel::top(("setup", self.layout_gen)).resizable(true).default_size(default_h).min_size(fs * 4.0);
@@ -2235,9 +2245,10 @@ impl App {
                         }
                     }
                 });
-                if !self.s.rules.is_empty() && ui.button("Clear all").on_hover_text("Remove every rule from the list (no files are touched)").clicked() {
-                    self.s.rules.clear();
-                    self.open_rule = None;
+                if !self.s.rules.is_empty()
+                    && ui.button("Clear all…").on_hover_text("Remove every rule from the list (asks first; no files are touched)").clicked()
+                {
+                    self.dialog = Some(Dialog::ClearRules(self.s.rules.len()));
                 }
                 ui.label(
                     RichText::new(
@@ -2600,15 +2611,22 @@ impl App {
         if self.plan.is_some() {
             let c = self.counts;
             ui.horizontal_wrapped(|ui| {
+                // "Files" always; the others only when they are not 0
                 chip(ui, "Files", c.total, accent(ui));
-                chip(ui, "Renamed", c.renamed, green());
-                chip(ui, "Moved", c.to_move - c.rename_only, green());
-                chip(ui, "Name clash (suffix added)", c.collisions, amber());
-                chip(ui, "Notes", c.warnings, amber());
-                chip(ui, "Unchanged / sorted", c.already_sorted + c.unchanged, grey());
-                chip(ui, "No date", c.no_date, amber());
-                chip(ui, "Errors", c.errors, red());
-                chip(ui, "New folders", c.new_folders, accent(ui));
+                for (label, value, color) in [
+                    ("Renamed", c.renamed, green()),
+                    ("Moved", c.to_move - c.rename_only, green()),
+                    ("Name clash (suffix added)", c.collisions, amber()),
+                    ("Notes", c.warnings, amber()),
+                    ("Unchanged / sorted", c.already_sorted + c.unchanged, grey()),
+                    ("No date", c.no_date, amber()),
+                    ("Errors", c.errors, red()),
+                    ("New folders", c.new_folders, accent(ui)),
+                ] {
+                    if value > 0 {
+                        chip(ui, label, value, color);
+                    }
+                }
             });
             if self.s.sort_into_folders {
                 ui.label(RichText::new(format!("Date sources — {}", self.source_summary)).weak().small());
@@ -3433,6 +3451,28 @@ impl App {
                         }
                     });
                 }
+                Dialog::ClearRules(n) => {
+                    ui.heading("Clear all rules?");
+                    ui.add_space(4.0);
+                    let rules = if *n == 1 { "the rule".to_string() } else { format!("all {n} rules") };
+                    ui.label(format!(
+                        "This removes {rules} from the list, so file names are kept as they are. \
+                         No files are touched. Saved presets are not changed; to keep this chain, \
+                         cancel and use “Save as preset” first."
+                    ));
+                    ui.add_space(8.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(egui::Button::new(RichText::new("Clear all").strong().color(Color32::WHITE)).fill(red())).clicked() {
+                            self.s.rules.clear();
+                            self.open_rule = None;
+                            self.status = "All rename rules cleared. No files were changed.".into();
+                            keep = false;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                }
                 Dialog::HelpMissing(p) => {
                     ui.heading("Help file not found");
                     ui.add_space(4.0);
@@ -3471,6 +3511,12 @@ impl App {
                     ui.label(format!("{} on Windows 10/11.", about::DESCRIPTION));
                     ui.add_space(4.0);
                     ui.label(RichText::new(about::DISTRIBUTION_NOTE).weak());
+                    ui.add_space(4.0);
+                    let where_ = match &self.ini_path {
+                        Some(p) => format!("Settings: {}", p.display()),
+                        None => "Settings: not saved (folder not writable)".to_string(),
+                    };
+                    ui.label(RichText::new(where_).weak().small());
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("Only image and video files are touched. Preview before Apply, Undo after; \

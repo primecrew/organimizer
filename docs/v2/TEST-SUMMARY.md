@@ -194,3 +194,35 @@ window decorations sizes are Wine/xfwm4's, not Windows 11's.
 * Not checked under Wine: which app real Windows uses for `.md` (Notepad
   is the fallback when none is registered), Explorer's file-properties
   Details tab.
+
+## v2.0.5 amendment (installer, installed-mode settings, UI polish)
+
+- Unit tests: 108 pass on Linux (`cargo test --no-default-features`); the
+  Windows test binary passes 107 under Wine (one test is Unix-only).
+  `cargo clippy --release --target x86_64-pc-windows-gnu`: 0 warnings.
+- `scripts/build-release.sh`: no build-machine paths in `PhotoSorter.exe` or
+  the setup exe (`strings` check).
+- Installer (Wine, separate test prefix, per-user install):
+  - Fresh install: files in `%LOCALAPPDATA%\Programs\PhotoSorter`;
+    `Start Menu\Programs\PrimeCrew Software\PhotoSorter.lnk` created beside a
+    pre-existing fake `Encode FFS.lnk`; HKCU uninstall key with
+    Publisher `PrimeCrew Software`, DisplayName, DisplayVersion, DisplayIcon.
+  - Installed mode: settings created in
+    `%APPDATA%\PrimeCrew Software\PhotoSorter\PhotoSorter.ini`; nothing
+    written beside the exe. Preview, apply (5 files into 4 folders) and undo
+    (5 restored, 4 empty folders removed); file hashes identical to before.
+  - Setup while PhotoSorter is running: refused (silent exit code 1618),
+    installed exe unchanged.
+  - Reinstall over the top (welcome page says "reinstall in place", skips
+    the who/where pages); two silent reinstalls with the desktop shortcut:
+    exactly one brand `.lnk` and one desktop `.lnk`.
+  - Uninstall: install folder, `PhotoSorter.lnk`, desktop shortcut and
+    registry key removed; `Encode FFS.lnk` and the brand folder kept;
+    APPDATA settings and photos untouched. With no other shortcut in the
+    brand folder, the folder is removed.
+- Screenshots: `screenshots/v2.0.5-main-window.png` (1280x900 default),
+  `screenshots/v2.0.5-about.png`, `screenshots/v2.0.5-clear-all-confirm.png`,
+  `screenshots/v2.0.5-setup-welcome.png`,
+  `screenshots/v2.0.5-setup-components.png`.
+- Not covered (Wine only): SmartScreen, all-users install to Program Files
+  with UAC, the Windows "Installed apps" UI.

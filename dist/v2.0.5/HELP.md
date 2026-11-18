@@ -25,6 +25,15 @@ ordered rules and sorts them into date folders such as `March 2024`.
 6. **Undo if needed.** **↩ Undo last run** (or File > Undo Last Run…)
    puts every file back under its original name and folder.
 
+## Portable or installed
+
+- **Portable zip:** settings are kept in `PhotoSorter.ini` next to
+  `PhotoSorter.exe`.
+- **Installed with setup:** settings are kept in
+  `%APPDATA%\PrimeCrew Software\PhotoSorter\PhotoSorter.ini`; the Start
+  Menu shortcut is in the *PrimeCrew Software* folder.
+- Either way, undo logs are written into the photo folder you sorted.
+
 ## Safety
 
 - Only image and video files are touched (the list is in Tools > Options);

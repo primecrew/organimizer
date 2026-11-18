@@ -19,6 +19,29 @@ Wine only, not on a real Windows PC.
   spelling (color, canceled, recognized), "Help file not found" dialog.
 - More hover help: Open Folder, Undo Last Run, folder path field, preset
   Delete, Clear all, Sort into date folders, Date source, If no date found.
+- Windows installer `PhotoSorter-2.0.5-setup.exe` (NSIS, modelled on the
+  Encode FFS one): per-user (`%LOCALAPPDATA%\Programs\PhotoSorter`) or
+  for everyone (Program Files), Start Menu shortcut in the shared
+  "PrimeCrew Software" folder, optional desktop shortcut, Add/Remove
+  Programs entry (publisher PrimeCrew Software), in-place upgrade without
+  duplicate shortcuts. Uninstall removes only the installed files and
+  shortcuts (the brand folder only when empty); photos, undo logs,
+  settings and presets are never deleted.
+- Installed mode: setup writes `PhotoSorter.installed` next to the exe and
+  the app then keeps `PhotoSorter.ini` in
+  `%APPDATA%\PrimeCrew Software\PhotoSorter`. A writable INI or a
+  `PhotoSorter.portable` file next to the exe keeps portable mode, so the
+  zip behaves as before. Undo logs stay in the sorted photo folder.
+- Larger default window (1280 x 900); Browse / drop folds step 1 to its
+  summary so steps 2 and 3 fit without scrolling.
+- Preview counters with 0 are hidden (Files is always shown).
+- "Clear all…" rules asks for confirmation.
+- Theme button shows Light / Dark text instead of sun / moon glyphs.
+- `THIRD-PARTY-NOTICES.txt` (crate licenses and notices, embedded font
+  licenses: Ubuntu Font Licence 1.0, SIL OFL 1.1) in the zip and the
+  installer.
+- Fixed the two clippy warnings in `rename.rs` (regex compiled per Padding
+  rule, identity map).
 - No change to how files are renamed, moved or undone. "Include subfolders"
   stays off by default.
 

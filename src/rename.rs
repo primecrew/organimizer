@@ -24,6 +24,9 @@ use chrono::NaiveDateTime;
 use chrono::format::{Item, StrftimeItems};
 use regex::{NoExpand, Regex, RegexBuilder};
 
+/// `\d+`, compiled once and cloned (cheap) into every Padding rule.
+static DIGITS: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| Regex::new(r"\d+").unwrap());
+
 use crate::date_source::{DateConfig, ResolvedDate, SourceKind, try_source};
 
 // ---------------------------------------------------------------------------
@@ -839,7 +842,7 @@ pub fn compile_rules(specs: &[RuleSpec]) -> Result<Vec<Box<dyn RenameRule>>, Str
             RuleKind::Delete(d) => Box::new(d.clone()),
             RuleKind::Strip(st) => Box::new(st.clone()),
             RuleKind::Rearrange(r) => Box::new(r.clone()),
-            RuleKind::Padding(p) => Box::new(CompiledPadding { rule: p.clone(), digits: Regex::new(r"\d+").unwrap() }),
+            RuleKind::Padding(p) => Box::new(CompiledPadding { rule: p.clone(), digits: DIGITS.clone() }),
             RuleKind::Randomize(r) => Box::new(CompiledRandomize {
                 rule: r.clone(),
                 alphabet: random_alphabet(r),
@@ -851,7 +854,7 @@ pub fn compile_rules(specs: &[RuleSpec]) -> Result<Vec<Box<dyn RenameRule>>, Str
                     .find
                     .split('|')
                     .filter(|f| !f.trim().is_empty())
-                    .map(|f| find_format_regex(f).map(|(re, fields)| (re, fields)))
+                    .map(find_format_regex)
                     .collect::<Result<Vec<_>, String>>()
                     .map_err(err)?,
                 to: r.to.clone(),

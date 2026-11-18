@@ -36,9 +36,16 @@ shown in a live preview first, and the last run can be undone.
   Follow system), file types and date priority live in Tools > Options.
   Help (F1) opens `HELP.md` beside the exe (falls back to `README.txt`);
   Help > About shows the icon, version, publisher and build notes.
-- **Portable settings** in a commented `PhotoSorter.ini` beside the exe (no
-  registry, no AppData), including **window memory** (position, size, column
+- **Settings** in a commented `PhotoSorter.ini`: beside the exe for the
+  portable zip, `%APPDATA%\PrimeCrew Software\PhotoSorter` when installed
+  (no registry), including **window memory** (position, size, column
   widths, panel height, open sections).
+
+**Download:** `PhotoSorter-2.0.5-win64.zip` (portable: settings in
+`PhotoSorter.ini` next to the exe) or `PhotoSorter-2.0.5-setup.exe`
+(installer: Start Menu › PrimeCrew Software › PhotoSorter, Add/Remove
+Programs, settings in `%APPDATA%\PrimeCrew Software\PhotoSorter`). Both
+contain README.txt, HELP.md, LICENSE and THIRD-PARTY-NOTICES.txt.
 
 **Status:** the exe is not code-signed, so Windows SmartScreen will probably
 warn on first run (More info > Run anyway; compare the SHA-256 published with
@@ -46,7 +53,8 @@ each release). It has been tested on Linux and under Wine only, not yet on a
 real Windows PC.
 
 End-user docs: `dist/v2.0.5/README.txt` and `dist/v2.0.5/HELP.md` (shipped
-as `README.txt` and `HELP.md` in the zip, together with `LICENSE`);
+as `README.txt` and `HELP.md`, together with `LICENSE` and
+`dist/v2.0.5/THIRD-PARTY-NOTICES.txt`);
 v1 docs: `dist/README.txt`. Version history: [CHANGELOG.md](CHANGELOG.md).
 Test notes: `docs/v2/TEST-SUMMARY.md`.
 
@@ -120,7 +128,7 @@ current "Include subfolders" setting.
 | `src/rename.rs` | rename rules (`RuleSpec` data + compiled `Box<dyn RenameRule>`), INI encoding, Windows name validation/sanitising |
 | `src/plan.rs` | pipeline `RenameStage` (rules) → `FolderStage` (Month YYYY); collision resolution incl. same-batch renames |
 | `src/ops.rs` | apply (rename, case-only rename, copy+verify+delete across volumes), undo log written first, undo |
-| `src/settings.rs` | commented `PhotoSorter.ini` beside the exe incl. `[Rules]` and `[Preset:Name]` (+ `scope`), preset duplicate/rename/validate, atomic save with `.bak` |
+| `src/settings.rs` | commented `PhotoSorter.ini` (beside the exe, or `%APPDATA%` when installed: `choose_ini_path`) incl. `[Rules]` and `[Preset:Name]` (+ `scope`), preset duplicate/rename/validate, atomic save with `.bak` |
 | `src/window_state.rs` | `[Window]` layout values: parse, validate and clamp the restored placement to the monitors' work areas |
 | `src/session.rs` | File > New Project reset + confirmation reasons, preset summaries |
 | `src/about.rs` | product, publisher (PrimeCrew Software), version and license strings for About and the header |
@@ -147,7 +155,7 @@ rustup target add x86_64-pc-windows-gnu
 sudo apt install gcc-mingw-w64-x86-64-posix        # linker + windres
 cargo test --no-default-features                    # core tests on Linux
 cargo build --release --target x86_64-pc-windows-gnu
-scripts/build-release.sh   # same, with --remap-path-prefix (used for releases)
+scripts/build-release.sh   # release: exe (--remap-path-prefix), notices, zip, NSIS setup.exe, SHA256SUMS
 # run the core tests as a Windows binary under Wine
 CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine64 cargo test --no-default-features --target x86_64-pc-windows-gnu
 # headless end-to-end run with a preset from an INI
@@ -158,6 +166,21 @@ The release build links statically (`+crt-static`, `-static`; see
 `scripts/build-release.sh`), so the exe only imports DLLs that ship with
 Windows, and remaps build-machine paths so none end up in the exe. The
 version resource names PrimeCrew Software as the company.
+
+## Installer
+
+`installer/installer.nsi` (NSIS 3, built by `scripts/build-release.sh`
+with `makensis`) follows the Encode FFS installer: per-user by default
+(`%LOCALAPPDATA%\Programs\PhotoSorter`, no admin rights) or for everyone
+(`Program Files\PhotoSorter`), Start Menu shortcut
+`PrimeCrew Software\PhotoSorter.lnk` (shared brand folder), optional
+desktop shortcut, Add/Remove Programs entry under
+`...\Uninstall\PhotoSorter`, in-place upgrade. It writes
+`PhotoSorter.installed` next to the exe; `settings::choose_ini_path` then
+uses `%APPDATA%\PrimeCrew Software\PhotoSorter\PhotoSorter.ini`. The
+uninstaller removes only what setup installed and the brand folder only
+when it is empty. `scripts/gen-third-party-notices.py` writes
+THIRD-PARTY-NOTICES.txt from `cargo metadata`.
 
 ## Changelog
 

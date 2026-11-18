@@ -11,9 +11,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// One-line description (About, version resource FileDescription).
 pub const DESCRIPTION: &str = "Rename and sort photos and videos into date folders";
 /// Short distribution note for the About window.
-pub const DISTRIBUTION_NOTE: &str = "Portable: no installer, no registry entries; settings live in \
-PhotoSorter.ini next to the exe. The exe is not code-signed, so Windows SmartScreen may warn on \
-first run (More info > Run anyway); check the SHA-256 from the release notes.";
+pub const DISTRIBUTION_NOTE: &str = "Portable zip or installer. The portable copy keeps PhotoSorter.ini \
+next to the exe; an installed copy keeps it in %APPDATA%\\PrimeCrew Software\\PhotoSorter. The exe \
+is not code-signed, so Windows SmartScreen may warn on first run (More info > Run anyway); check \
+the SHA-256 from the release notes.";
 /// License line (About); the full text ships as LICENSE beside the exe.
 pub const LICENSE_LINE: &str = "Licensed under GPL v3";
 
@@ -53,5 +54,6 @@ mod tests {
         assert!(gpl.contains("END OF TERMS AND CONDITIONS") && gpl.lines().count() == 674);
         assert_eq!(build.matches("CompanyName").count(), 1);
         assert!(DISTRIBUTION_NOTE.contains("not code-signed") && DISTRIBUTION_NOTE.contains("Portable"));
+        assert!(DISTRIBUTION_NOTE.contains(r"%APPDATA%\PrimeCrew Software\PhotoSorter"));
     }
 }

@@ -9,7 +9,7 @@
 pub const MIN_SIZE: [f32; 2] = [760.0, 480.0];
 /// Size used the first time, after "Reset window layout", or when the saved
 /// size is unusable.
-pub const DEFAULT_SIZE: [f32; 2] = [1200.0, 800.0];
+pub const DEFAULT_SIZE: [f32; 2] = [1280.0, 900.0];
 /// Rough size of the title bar + borders around the inner area.
 const DECOR: [f32; 2] = [16.0, 60.0];
 /// How much of the title bar must be on a monitor for a saved position to

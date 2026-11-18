@@ -1,10 +1,12 @@
-//! Portable settings in `PhotoSorter.ini` beside the executable.
+//! Settings in `PhotoSorter.ini`: beside the executable (portable, the
+//! default) or, for a copy installed by setup, in
+//! `%APPDATA%\PrimeCrew Software\PhotoSorter` (see [`choose_ini_path`]).
 //!
 //! * The file is always (re)generated from a commented template in
 //!   [`Settings::to_ini`], so comments survive every save.
 //! * Parsing is lenient: unknown sections/keys are ignored, bad values fall
 //!   back to defaults, nothing panics.
-//! * Nothing is written to the registry or AppData.
+//! * Nothing is written to the registry; AppData only in installed mode.
 //! * The current rename-rule chain lives in `[Rules]` (`rule1 = ...`).
 //! * Named presets (whole chain + options) are `[Preset:Name]` sections in
 //!   the same file, using the same keys as the main sections.
@@ -20,6 +22,12 @@ use crate::template::DEFAULT_TEMPLATE;
 use crate::window_state::{WindowLayout, format_widths, parse_num, parse_widths};
 
 pub const INI_NAME: &str = "PhotoSorter.ini";
+/// Written beside the exe by setup: settings go to %APPDATA% instead.
+pub const INSTALLED_MARKER: &str = "PhotoSorter.installed";
+/// Optional file beside the exe that forces portable mode.
+pub const PORTABLE_MARKER: &str = "PhotoSorter.portable";
+/// Settings folder below %APPDATA% in installed mode.
+pub const APPDATA_SUBDIR: [&str; 2] = ["PrimeCrew Software", "PhotoSorter"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
@@ -94,8 +102,8 @@ impl Default for Settings {
             presets: Vec::new(),
             theme: Theme::Dark,
             font_size: 15.0,
-            window_width: 1200.0,
-            window_height: 800.0,
+            window_width: crate::window_state::DEFAULT_SIZE[0],
+            window_height: crate::window_state::DEFAULT_SIZE[1],
             layout: WindowLayout::default(),
         }
     }
@@ -525,9 +533,11 @@ impl Settings {
             r#"; ===========================================================================
 ; PhotoSorter settings
 ; ---------------------------------------------------------------------------
-; This file lives next to PhotoSorter.exe and is the ONLY place PhotoSorter
-; stores anything (no registry, no AppData). Delete it to reset to defaults;
-; a fresh, fully commented copy is written on the next start.
+; This file is the ONLY place PhotoSorter stores settings (no registry). It
+; lives next to PhotoSorter.exe (portable copy) or, when PhotoSorter was
+; installed with setup, in %APPDATA%\PrimeCrew Software\PhotoSorter.
+; Delete it to reset to defaults; a fresh, fully commented copy is written
+; on the next start.
 ;
 ; Lines starting with ';' are comments. Unknown keys are ignored and invalid
 ; values silently fall back to their defaults. PhotoSorter rewrites this file
@@ -660,7 +670,7 @@ theme = {theme}
 font_size = {font_size}
 
 ; Window size in logical pixels, remembered on exit.
-; Allowed: width 640 - 10000, height 420 - 10000. Default: 1200 x 800
+; Allowed: width 640 - 10000, height 420 - 10000. Default: 1280 x 900
 width = {w}
 height = {h}
 
@@ -781,8 +791,84 @@ pub fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
 }
 
+/// `%APPDATA%` (Roaming) of the current user, if set.
+pub fn appdata_dir() -> Option<PathBuf> {
+    std::env::var_os("APPDATA").filter(|v| !v.is_empty()).map(PathBuf::from).filter(|p| p.is_absolute())
+}
+
+/// Where the settings live.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsMode {
+    /// `PhotoSorter.ini` beside the exe (the zip; always the case before 2.0.5).
+    Portable,
+    /// `%APPDATA%\PrimeCrew Software\PhotoSorter\PhotoSorter.ini`.
+    AppData,
+}
+
+fn is_regular_file(p: &Path) -> bool {
+    std::fs::symlink_metadata(p).map(|m| m.is_file()).unwrap_or(false)
+}
+
+fn file_writable(p: &Path) -> bool {
+    std::fs::OpenOptions::new().append(true).open(p).is_ok()
+}
+
+/// Can a new file be created in `dir`? Probes with a uniquely named temp
+/// file that is removed again (nothing else in the folder is touched).
+fn dir_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".PhotoSorter-write-test-{}.tmp", std::process::id()));
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+        Ok(f) => {
+            drop(f);
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Decide where `PhotoSorter.ini` lives, in this order:
+/// 1. `PhotoSorter.portable` beside the exe -> portable;
+/// 2. a writable `PhotoSorter.ini` beside the exe -> portable (an existing
+///    portable copy keeps working exactly as before);
+/// 3. `PhotoSorter.installed` (written by setup) -> AppData;
+/// 4. a read-only `PhotoSorter.ini` beside the exe -> portable, read-only
+///    (as before: loaded, not saved, with a notice);
+/// 5. the exe folder is writable -> portable (first start of the zip);
+/// 6. otherwise (e.g. copied into Program Files by hand) -> AppData.
+///
+/// AppData falls back to portable when `%APPDATA%` is unknown.
+pub fn choose_ini_path(exe_dir: &Path, appdata: Option<&Path>) -> (PathBuf, SettingsMode) {
+    let beside = exe_dir.join(INI_NAME);
+    let portable = (beside.clone(), SettingsMode::Portable);
+    let in_appdata = || {
+        appdata.map(|a| {
+            let mut p = a.to_path_buf();
+            for part in APPDATA_SUBDIR {
+                p.push(part);
+            }
+            (p.join(INI_NAME), SettingsMode::AppData)
+        })
+    };
+    if is_regular_file(&exe_dir.join(PORTABLE_MARKER)) {
+        return portable;
+    }
+    let ini_exists = is_regular_file(&beside);
+    if ini_exists && file_writable(&beside) {
+        return portable;
+    }
+    if is_regular_file(&exe_dir.join(INSTALLED_MARKER)) {
+        return in_appdata().unwrap_or(portable);
+    }
+    if ini_exists || dir_writable(exe_dir) {
+        return portable;
+    }
+    in_appdata().unwrap_or(portable)
+}
+
+/// Path of the settings file for the running exe (see [`choose_ini_path`]).
 pub fn ini_path() -> Option<PathBuf> {
-    exe_dir().map(|d| d.join(INI_NAME))
+    exe_dir().map(|d| choose_ini_path(&d, appdata_dir().as_deref()).0)
 }
 
 /// Result of loading the settings.
@@ -814,6 +900,12 @@ pub fn load_or_create(path: Option<PathBuf>) -> Loaded {
         }
         Err(_) => {
             let settings = Settings::default();
+            // installed mode: %APPDATA%\PrimeCrew Software\PhotoSorter may not exist yet
+            if let Some(dir) = path.parent()
+                && !dir.as_os_str().is_empty()
+            {
+                let _ = std::fs::create_dir_all(dir);
+            }
             match save(&path, &settings) {
                 Ok(()) => Loaded { settings, path: Some(path), notice: None },
                 Err(_) => Loaded {
@@ -894,7 +986,7 @@ mod tests {
         assert_eq!(s.date.auto_order, vec![SourceKind::Created, SourceKind::Filename]);
         assert_eq!(s.date.fallback, Fallback::Created);
         assert_eq!(s.font_size, 15.0);
-        assert_eq!(s.window_width, 1200.0);
+        assert_eq!(s.window_width, 1280.0);
         assert_eq!(s.theme, Theme::Light);
         // presets are visible to the parser for later use
         assert_eq!(parse_ini(text)["preset:holiday"]["source"], "exif");
@@ -1295,5 +1387,68 @@ mod tests {
         // an INI written by 2.0.3 still parses in the 2.0.2 reader's style
         // (theme = system is unknown there and simply falls back to dark)
         assert!(Settings::default().to_ini().contains("\r\n[Window]\r\n"));
+    }
+
+    #[test]
+    fn ini_path_portable_vs_installed() {
+        use std::fs;
+        let exe = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let in_app = app.path().join("PrimeCrew Software").join("PhotoSorter").join(INI_NAME);
+        let beside = exe.path().join(INI_NAME);
+        let choose = || choose_ini_path(exe.path(), Some(app.path()));
+
+        // zip, first start: writable folder, nothing there -> beside the exe
+        assert_eq!(choose(), (beside.clone(), SettingsMode::Portable));
+        // the write probe leaves nothing behind
+        assert_eq!(fs::read_dir(exe.path()).unwrap().count(), 0);
+
+        // installed by setup (marker, no INI) -> AppData
+        fs::write(exe.path().join(INSTALLED_MARKER), b"x").unwrap();
+        assert_eq!(choose(), (in_app.clone(), SettingsMode::AppData));
+        // ...unless %APPDATA% is unknown
+        assert_eq!(choose_ini_path(exe.path(), None), (beside.clone(), SettingsMode::Portable));
+        // a writable INI beside the exe wins over the marker
+        fs::write(&beside, b"[General]\n").unwrap();
+        assert_eq!(choose(), (beside.clone(), SettingsMode::Portable));
+        fs::remove_file(&beside).unwrap();
+        // a portable marker wins over everything
+        fs::write(exe.path().join(PORTABLE_MARKER), b"").unwrap();
+        assert_eq!(choose(), (beside.clone(), SettingsMode::Portable));
+        fs::remove_file(exe.path().join(PORTABLE_MARKER)).unwrap();
+        // a folder named like the marker / INI is not a marker / INI
+        fs::remove_file(exe.path().join(INSTALLED_MARKER)).unwrap();
+        fs::create_dir(exe.path().join(INSTALLED_MARKER)).unwrap();
+        assert_eq!(choose(), (beside.clone(), SettingsMode::Portable));
+    }
+
+    #[test]
+    fn installed_mode_creates_the_appdata_folder() {
+        let app = tempfile::tempdir().unwrap();
+        let ini = app.path().join("PrimeCrew Software").join("PhotoSorter").join(INI_NAME);
+        let l = load_or_create(Some(ini.clone()));
+        assert_eq!(l.path.as_deref(), Some(ini.as_path()));
+        assert!(l.notice.is_none());
+        assert!(ini.is_file());
+        assert!(!l.settings.include_subfolders);
+        // the next start reads it back
+        let again = load_or_create(Some(ini.clone()));
+        assert_eq!(again.settings, l.settings);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_exe_folder_without_ini_uses_appdata() {
+        use std::os::unix::fs::PermissionsExt;
+        let exe = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(exe.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let probe_ok = std::fs::write(exe.path().join("x"), b"").is_ok(); // root ignores permissions
+        let (p, mode) = choose_ini_path(exe.path(), Some(app.path()));
+        std::fs::set_permissions(exe.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !probe_ok {
+            assert_eq!(mode, SettingsMode::AppData);
+            assert!(p.starts_with(app.path()));
+        }
     }
 }

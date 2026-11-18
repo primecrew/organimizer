@@ -12,9 +12,21 @@ WHAT IT DOES
   you click Apply and confirm, and the last run can always be undone.
 
 INSTALL
-  None. Put PhotoSorter.exe in any folder (or on a USB stick) and run it.
-  No installer, no runtime, no DLLs, no registry entries. Settings live in
-  PhotoSorter.ini next to the exe. Settings from PhotoSorter 0.1 load as-is.
+  Two ways, same program:
+  * Portable (PhotoSorter-2.0.5-win64.zip): put PhotoSorter.exe in any
+    folder (or on a USB stick) and run it. No installer, no runtime, no
+    DLLs, no registry entries. Settings live in PhotoSorter.ini next to the
+    exe. Settings from PhotoSorter 0.1 load as-is.
+  * Installer (PhotoSorter-2.0.5-setup.exe): installs just for you
+    (%LOCALAPPDATA%\Programs\PhotoSorter, no administrator rights) or for
+    everyone (Program Files). Start Menu shortcut in the "PrimeCrew
+    Software" folder (next to Encode FFS), optional desktop shortcut,
+    listed in Add/Remove Programs (publisher PrimeCrew Software). Settings
+    live in %APPDATA%\PrimeCrew Software\PhotoSorter\PhotoSorter.ini.
+    Running a newer (or the same) setup again upgrades in place, without
+    duplicate shortcuts. Uninstall removes the program files and
+    shortcuts only; your photos, undo logs, settings and presets stay.
+    Silent: setup.exe /S [/ALLUSERS] [/DESKTOP] [/D=folder].
 
 THE WINDOW (top to bottom = the order things happen)
   Menu bar           File / Presets / Tools / Help (see MENU BAR below).
@@ -26,7 +38,8 @@ THE WINDOW (top to bottom = the order things happen)
                      "Options..." button to change them.
   2 Rename rules     The rule list. Each row: checkbox (on/off), name,
                      summary, Edit, move up/down, duplicate, delete.
-                     "+ Add rule" adds a rule at the end. Rules run top to
+                     "+ Add rule" adds a rule at the end; "Clear all..."
+                     removes every rule (asks first; no files touched). Rules run top to
                      bottom on the name WITHOUT its extension. Presets row:
                      choose / Load / Delete, or type a name and "Save as
                      preset" (stores the rules + options of steps 1 and 3),
@@ -144,10 +157,10 @@ PRESETS  (Presets > Manage Presets..., or "Manage..." in step 2)
 
 OPTIONS  (Tools > Options..., or the "Options..." buttons)
   Appearance       Theme: Dark / Light / Follow system (uses the Windows
-                   app colour setting), and the text size. These apply at
+                   app color setting), and the text size. These apply at
                    once and are saved automatically (no Save needed). The
-                   sun/moon button in the top-right corner is a quick
-                   Dark/Light switch. "Reset window layout" restores the
+                   Light / Dark button in the top-right corner is a
+                   quick switch. "Reset window layout" restores the
                    default window size and position, top-area height,
                    column widths and open/collapsed sections.
   File types       The editable extension list, comma-separated, case-
@@ -236,7 +249,16 @@ SAFETY RULES
     only then the original is removed. Symbolic links are not followed.
 
 SETTINGS: PhotoSorter.ini
-  Next to PhotoSorter.exe, created on first run and fully commented (open
+  Where: next to PhotoSorter.exe (portable copy), or in
+  %APPDATA%\PrimeCrew Software\PhotoSorter when installed with setup
+  (setup puts a PhotoSorter.installed file next to the exe). Rules, in
+  order: a file named PhotoSorter.portable next to the exe forces
+  portable mode; a writable PhotoSorter.ini next to the exe is always
+  used; otherwise an installed copy, or a copy in a folder that is not
+  writable, uses %APPDATA%. Tools > Open Settings Folder opens the folder
+  in use. Undo logs are not settings: they are always written into the
+  photo folder you sorted.
+  Created on first run and fully commented (open
   it in Notepad: every option, allowed values and defaults are explained).
   Rewritten when the app closes (and when presets / options are saved, and
   a moment after the window layout changes),
@@ -279,6 +301,19 @@ CHANGES IN 2.0.5
   * Wording and hover-help tidy-ups ("Undo Last Run..." in the File menu,
     "date folders", more tooltips). Renaming, sorting and undo are
     unchanged; "Include subfolders" is still OFF by default.
+  * New Windows installer (PhotoSorter-2.0.5-setup.exe) next to the
+    portable zip; see INSTALL. Installed copies keep their settings in
+    %APPDATA%\PrimeCrew Software\PhotoSorter; the portable zip works
+    exactly as before.
+  * Larger default window (1280 x 900; a saved size is kept). Choosing a
+    folder with Browse... or by dropping it folds step 1 to its one-line
+    summary so steps 2 and 3 fit; click it to open it again.
+  * The preview shows only the counters that are not 0 (Files always).
+  * "Clear all..." rules now asks first.
+  * The theme button says Light / Dark (the sun/moon symbols did not
+    always display).
+  * THIRD-PARTY-NOTICES.txt lists the licenses of the libraries and fonts
+    built into PhotoSorter.exe.
 
 CHANGES IN 2.0.4
   * "Include subfolders" is now OFF by default: on a fresh start (no
@@ -351,4 +386,4 @@ LICENSE
   Public License v3.0 or later. See LICENSE (next to PhotoSorter.exe).
 
 SHA-256 (PhotoSorter.exe)
-  977a180350d88c9bc8b08017a5d6675b5f6fcabf9bb8a4ba6cff24808f78332b
+  13567e8e8ba429b1192132fe0b61bac49b5a0a4c9e40bd5634397d44b286b048
