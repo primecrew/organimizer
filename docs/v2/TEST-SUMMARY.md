@@ -213,13 +213,34 @@ window decorations sizes are Wine/xfwm4's, not Windows 11's.
     (5 restored, 4 empty folders removed); file hashes identical to before.
   - Setup while PhotoSorter is running: refused (silent exit code 1618),
     installed exe unchanged.
-  - Reinstall over the top (welcome page says "reinstall in place", skips
-    the who/where pages); two silent reinstalls with the desktop shortcut:
+  - Reinstall over the top (skips the who/where pages); two silent
+    reinstalls with the desktop shortcut:
     exactly one brand `.lnk` and one desktop `.lnk`.
   - Uninstall: install folder, `PhotoSorter.lnk`, desktop shortcut and
     registry key removed; `Encode FFS.lnk` and the brand folder kept;
     APPDATA settings and photos untouched. With no other shortcut in the
     brand folder, the folder is removed.
+- Installer, shared PrimeCrew setup look (Wine, per-user and all-users):
+  - Fresh install: welcome title "New installation"; folder page labelled
+    "Install to:" (editable, Browse); Ready page with a "New installation"
+    band and "Install to: <path>"; finish page "Installed v2.0.5 to <path>".
+  - Second run over it, with DisplayVersion set to 2.0.4 in the Wine
+    registry to fake an older install: first page title "Updating existing
+    installation: PhotoSorter v2.0.4 → v2.0.5", directly followed by
+    "Installed in: <path>" (text only); who/where pages skipped; Ready page
+    repeats the banner and read-only path; finish page "Updated to v2.0.5
+    in <path>"; DisplayVersion back to 2.0.5, still one Start Menu `.lnk`.
+  - All-users: silent `/S /ALLUSERS` install to `C:\Program Files\PhotoSorter`
+    (HKLM key), then a normal run of setup: detected from HKLM, Ready page
+    shows "Installed in: C:\Program Files\PhotoSorter" and "Everyone on this
+    PC" (canceled there, then uninstalled with `/S /ALLUSERS`).
+  - Under Wine the → glyph comes from a fallback font and looks small; on
+    Windows the dialog font is expected to draw it normally (not checked).
+  - Screenshots: `screenshots/v2.0.5-setup-welcome.png`,
+    `v2.0.5-setup-new-install-to.png`, `v2.0.5-setup-new-ready.png`,
+    `v2.0.5-setup-new-finish.png`, `v2.0.5-setup-upgrade.png`,
+    `v2.0.5-setup-upgrade-ready.png`, `v2.0.5-setup-upgrade-finish.png`,
+    `v2.0.5-setup-upgrade-ready-allusers.png`.
 - Screenshots: `screenshots/v2.0.5-main-window.png` (1280x900 default),
   `screenshots/v2.0.5-about.png`, `screenshots/v2.0.5-clear-all-confirm.png`,
   `screenshots/v2.0.5-setup-welcome.png`,

@@ -27,6 +27,15 @@ Wine only, not on a real Windows PC.
   duplicate shortcuts. Uninstall removes only the installed files and
   shortcuts (the brand folder only when empty); photos, undo logs,
   settings and presets are never deleted.
+- Setup shows clearly whether it updates or installs, in the same look as
+  the other PrimeCrew Software installers. Upgrade: the first page and the
+  Ready to install page start with "Updating existing installation:
+  PhotoSorter v<old> → v<new>", followed by "Installed in: <path>" as plain
+  text (no Browse; an update never moves the folder, and a per-user or
+  all-users install stays that way). Fresh install: "New installation",
+  folder page labelled "Install to:" with Browse. New Ready to install page
+  (who, folder, shortcuts). Finish page: "Updated to v<new> in <path>" or
+  "Installed v<new> to <path>".
 - Installed mode: setup writes `PhotoSorter.installed` next to the exe and
   the app then keeps `PhotoSorter.ini` in
   `%APPDATA%\PrimeCrew Software\PhotoSorter`. A writable INI or a

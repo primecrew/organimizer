@@ -9,6 +9,13 @@
 ; - A later setup finds that entry and upgrades in place (same folder and mode, who/where
 ;   pages skipped); old shortcuts are replaced, never duplicated. If PhotoSorter is running,
 ;   setup asks you to close it first.
+; - Shared PrimeCrew setup look (same on every PrimeCrew installer):
+;     upgrade: first page and Ready page start with the banner
+;              "Updating existing installation: <App> v<old> → v<new>", then
+;              "Installed in: <path>" as read-only text (no Browse; the folder never moves)
+;     fresh:   title "New installation"; the folder page is labelled "Install to:" (editable,
+;              Browse); the Ready page repeats "New installation" / "Install to: <path>"
+;     finish:  "Updated to v<new> in <path>"  or  "Installed v<new> to <path>"
 ; - Writes <MARKER> next to the exe so the app keeps PhotoSorter.ini in
 ;   %APPDATA%\<PUBLISHER>\<APP_NAME> (Program Files is not writable)
 ; - Uninstall removes only the files setup installed and the shortcuts; the brand Start Menu
@@ -30,6 +37,7 @@ Target amd64-unicode
 !include "FileFunc.nsh"
 !include "nsDialogs.nsh"
 !include "x64.nsh"
+!include "Sections.nsh"
 
 Name "${APP_NAME}"
 OutFile "${OUTFILE}"
@@ -56,22 +64,39 @@ Var WantDesktop     ; 1 = desktop shortcut (silent /DESKTOP)
 Var Upgrade         ; 1 = existing install found
 Var InstalledVersion
 Var WelcomeMsg
+Var WelcomeTitle
+Var FinishTitle
+Var FinishMsg
+Var Banner          ; "Updating existing installation: ..." or "New installation"
+Var PathLabel       ; "Installed in:" or "Install to:"
+Var BannerFont
 
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
 !define MUI_COMPONENTSPAGE_SMALLDESC
-!define MUI_WELCOMEPAGE_TEXT "This installs ${APP_NAME} ${APP_VERSION} by ${PUBLISHER}.$\r$\n$\r$\n${APP_NAME} renames and sorts photos and videos into date folders. It always shows a preview first, never overwrites or deletes files, and every run can be undone.$\r$\n$\r$\nSettings and presets are kept in %APPDATA%\${PUBLISHER}\${APP_NAME}."
+!define ABOUT_TEXT "${APP_NAME} renames and sorts photos and videos into date folders. It always shows a preview first, never overwrites or deletes files, and every run can be undone."
+; Title and text are set at run time (.onInit / FinishPre): upgrade banner or "New installation"
+!define MUI_WELCOMEPAGE_TITLE "$WelcomeTitle"
+!define MUI_WELCOMEPAGE_TITLE_3LINES
+!define MUI_WELCOMEPAGE_TEXT "$WelcomeMsg"
+!define MUI_FINISHPAGE_TITLE "$FinishTitle"
+!define MUI_FINISHPAGE_TEXT "$FinishMsg"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${APP_NAME} now"
 
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW WelcomeShow
 !insertmacro MUI_PAGE_WELCOME
 Page custom InstallModePage InstallModeLeave
+!define MUI_PAGE_HEADER_TEXT "New installation"
+!define MUI_PAGE_HEADER_SUBTEXT "Choose where to install ${APP_NAME} v${APP_VERSION}."
+!define MUI_DIRECTORYPAGE_TEXT_TOP "Setup will install ${APP_NAME} in the folder below. To use another folder, click Browse."
+!define MUI_DIRECTORYPAGE_TEXT_DESTINATION "Install to:"
 !define MUI_PAGE_CUSTOMFUNCTION_PRE DirectoryPagePre
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_COMPONENTS
+Page custom ReadyPage
 !insertmacro MUI_PAGE_INSTFILES
+!define MUI_PAGE_CUSTOMFUNCTION_PRE FinishPre
 !insertmacro MUI_PAGE_FINISH
 
 !define MUI_UNCONFIRMPAGE_TEXT_TOP "${APP_NAME} will be removed from the folder below. Your photos, undo logs, settings and presets (%APPDATA%\${PUBLISHER}\${APP_NAME}) are not touched."
@@ -130,22 +155,30 @@ Function DetectExistingInstall
   ${EndIf}
 FunctionEnd
 
-Function SetUpgradeWelcome
-  ${If} $InstalledVersion == "${APP_VERSION}"
-    StrCpy $WelcomeMsg "${APP_NAME} ${APP_VERSION} is already installed. This will reinstall it in place.$\r$\n$\r$\nYour settings, presets and undo logs are kept."
-  ${ElseIf} $InstalledVersion == ""
-    StrCpy $WelcomeMsg "${APP_NAME} is already installed. This will replace it in place with ${APP_VERSION}.$\r$\n$\r$\nYour settings, presets and undo logs are kept."
+Function SetModeTexts
+  ; Shared PrimeCrew look. $INSTDIR is final on an upgrade (it never moves).
+  ${If} $Upgrade == 1
+    ${If} $InstalledVersion == ""
+      StrCpy $Banner "Updating existing installation: ${APP_NAME} (version unknown) → v${APP_VERSION}"
+    ${Else}
+      StrCpy $Banner "Updating existing installation: ${APP_NAME} v$InstalledVersion → v${APP_VERSION}"
+    ${EndIf}
+    StrCpy $PathLabel "Installed in:"
+    StrCpy $WelcomeTitle "$Banner"
+    ${If} $AllUsers == 1
+      StrCpy $1 "for everyone on this PC"
+    ${Else}
+      StrCpy $1 "just for you"
+    ${EndIf}
+    StrCpy $WelcomeMsg "$PathLabel$\r$\n$INSTDIR$\r$\n$\r$\nThe update stays in this folder ($1). Your settings, presets and undo logs are kept, and your photos are not touched.$\r$\n$\r$\n${ABOUT_TEXT}"
   ${Else}
-    StrCpy $WelcomeMsg "${APP_NAME} $InstalledVersion is installed. This will replace it in place with ${APP_VERSION}.$\r$\n$\r$\nYour settings, presets and undo logs are kept."
+    StrCpy $Banner "New installation"
+    StrCpy $PathLabel "Install to:"
+    StrCpy $WelcomeTitle "New installation"
+    StrCpy $WelcomeMsg "This installs ${APP_NAME} v${APP_VERSION} by ${PUBLISHER}.$\r$\n$\r$\n${ABOUT_TEXT}$\r$\n$\r$\nYou can choose who gets it and where it goes on the next pages. Settings and presets are kept in %APPDATA%\${PUBLISHER}\${APP_NAME}."
   ${EndIf}
 FunctionEnd
 
-Function WelcomeShow
-  ${If} $Upgrade == 1
-  ${AndIf} $WelcomeMsg != ""
-    ${NSD_SetText} $mui.WelcomePage.Text "$WelcomeMsg"
-  ${EndIf}
-FunctionEnd
 
 Function DirectoryPagePre
   ${If} $Upgrade == 1
@@ -324,6 +357,70 @@ Section /o "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
 SectionEnd
 
+; ------------------------------------------------------------------ Ready / Finish pages
+; (after the sections: they read ${SecStart} / ${SecDesktop})
+Function ReadyPage
+  ; "Ready to Install": banner + read-only path (label text, no Browse), then a short summary
+  Call SetModeTexts ; $INSTDIR may have changed on the folder page (fresh install)
+  !insertmacro MUI_HEADER_TEXT "Ready to install" "Check the details below, then click Install."
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+  CreateFont $BannerFont "$(^Font)" 10 700
+  ${NSD_CreateLabel} 0 0 100% 22u "  $Banner"
+  Pop $1
+  ${NSD_AddStyle} $1 ${SS_CENTERIMAGE} ; one line, vertically centred in the coloured band
+  SendMessage $1 ${WM_SETFONT} $BannerFont 1
+  ${If} $Upgrade == 1
+    SetCtlColors $1 0x000000 0xFFF2CC ; pale amber: updating
+  ${Else}
+    SetCtlColors $1 0x000000 0xDDEBF7 ; pale blue: new
+  ${EndIf}
+  ${NSD_CreateLabel} 0 30u 100% 10u "$PathLabel"
+  Pop $1
+  ${NSD_CreateLabel} 8u 41u 97% 20u "$INSTDIR"
+  Pop $1
+  ${If} $AllUsers == 1
+    StrCpy $2 "Everyone on this PC (Program Files)"
+  ${Else}
+    StrCpy $2 "Just you (no administrator rights)"
+  ${EndIf}
+  StrCpy $3 "Start Menu: "
+  ${If} ${SectionIsSelected} ${SecStart}
+    StrCpy $3 "$3${PUBLISHER}\${APP_NAME}"
+  ${Else}
+    StrCpy $3 "$3no shortcut"
+  ${EndIf}
+  ${If} ${SectionIsSelected} ${SecDesktop}
+    StrCpy $3 "$3$\r$\nDesktop: shortcut"
+  ${Else}
+    StrCpy $3 "$3$\r$\nDesktop: no shortcut"
+  ${EndIf}
+  ${NSD_CreateLabel} 0 66u 100% 40u "Installed for: $2$\r$\n$3$\r$\nSettings and presets: %APPDATA%\${PUBLISHER}\${APP_NAME}"
+  Pop $1
+  ${If} $Upgrade == 1
+    ${NSD_CreateLabel} 0 110u 100% 24u "Click Install to update. Your settings, presets, undo logs and photos are kept."
+  ${Else}
+    ${NSD_CreateLabel} 0 110u 100% 24u "Click Install to start."
+  ${EndIf}
+  Pop $1
+  GetDlgItem $1 $HWNDPARENT 1
+  SendMessage $1 ${WM_SETTEXT} 0 "STR:$(^InstallBtn)"
+  nsDialogs::Show
+FunctionEnd
+
+Function FinishPre
+  ${If} $Upgrade == 1
+    StrCpy $FinishTitle "${APP_NAME} is up to date"
+    StrCpy $FinishMsg "Updated to v${APP_VERSION} in $INSTDIR$\r$\n$\r$\nYour settings, presets and undo logs were kept."
+  ${Else}
+    StrCpy $FinishTitle "${APP_NAME} is installed"
+    StrCpy $FinishMsg "Installed v${APP_VERSION} to $INSTDIR$\r$\n$\r$\nFind it in the Start Menu under ${PUBLISHER}."
+  ${EndIf}
+FunctionEnd
+
 Function .onInit
   StrCpy $AllUsers 0
   StrCpy $WantDesktop 0
@@ -359,8 +456,8 @@ Function .onInit
   ${If} $INSTDIR == ""
     Call DefaultDir
   ${EndIf}
+  Call SetModeTexts
   ${If} $Upgrade == 1
-    Call SetUpgradeWelcome
     ; keep the desktop shortcut on upgrade if there is one
     !insertmacro SetMode
     ${If} ${FileExists} "$DESKTOP\${APP_NAME}.lnk"
