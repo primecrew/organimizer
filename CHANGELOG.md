@@ -1,10 +1,10 @@
 # Changelog
 
-All versions are portable Windows 10/11 builds (one exe, no installer). None
-of them is code-signed, and so far they have been tested on Linux and under
-Wine only, not on a real Windows PC.
+All versions are Windows 10/11 builds (portable exe; from 2.0.5 also an
+installer). None of them is code-signed, and so far they have been tested on
+Linux and under Wine only, not on a real Windows PC.
 
-## 2.0.5 (not released yet, 2026-11-18)
+## 2.0.5 (git tag `v2.0.5`, 2026-11-21)
 - Help > About: app icon (64x64), version, publisher (PrimeCrew Software),
   short description, portable / unsigned note, license line.
 - Main-window header now shows the app icon, name and version.
