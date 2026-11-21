@@ -17,7 +17,7 @@ required-features = ["gui"]
 
 [features]
 default = ["gui", "net"]
-gui = ["dep:eframe", "dep:egui", "dep:egui_extras", "dep:rfd"]
+gui = ["dep:eframe", "dep:egui", "dep:egui_extras", "dep:rfd", "dep:jpeg-decoder"]
 # TMDB lookups (Plex tab): pure-Rust HTTPS client
 net = ["dep:ureq"]
 
@@ -33,6 +33,8 @@ egui_extras = { version = "0.37.0", default-features = false, optional = true }
 rfd = { version = "0.17.2", optional = true }
 egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"], optional = true }
 ureq = { version = "2.12", default-features = false, features = ["tls"], optional = true }
+# TMDB poster thumbnails in the lookup window (pure Rust)
+jpeg-decoder = { version = "0.3", default-features = false, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # ShellExecuteW for Help > README.txt and "Open ... Folder" (no shell / cmd);

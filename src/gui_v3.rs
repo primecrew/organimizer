@@ -882,7 +882,7 @@ impl App {
     }
 
     /// TMDB auth if lookups are switched on and the key looks valid.
-    fn tmdb_auth(&self) -> Option<tmdb::Auth> {
+    pub(super) fn tmdb_auth(&self) -> Option<tmdb::Auth> {
         if !self.s.plex.tmdb_enabled {
             return None;
         }
@@ -997,7 +997,10 @@ impl App {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| self.plex_editor(ui, ctx));
                 });
         }
-        egui::CentralPanel::default_margins().show(ui, |ui| self.plex_table(ui));
+        egui::CentralPanel::default_margins().show(ui, |ui| {
+            self.lookup_strip(ui, ctx);
+            self.plex_table(ui);
+        });
     }
 
     fn plex_setup(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1319,7 +1322,8 @@ impl App {
                         } else {
                             let c = r.analysis.confidence;
                             let edited = r.analysis != r.detected;
-                            dot_label(ui, conf_color(c), if edited { "Edited" } else { c.label() }).on_hover_text("How sure Organimizer is about this file: green = high, amber = medium, red = low (please check)");
+                            let text = if r.analysis.from_tmdb { "TMDB" } else if edited { "Edited" } else { c.label() };
+                            dot_label(ui, conf_color(c), text).on_hover_text("How sure Organimizer is about this file: green = high, amber = medium, red = low (please check)");
                         }
                     });
                     row.col(|ui| {

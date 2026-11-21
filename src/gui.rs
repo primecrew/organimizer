@@ -17,6 +17,9 @@
 
 #[path = "gui_v3.rs"]
 mod v3;
+// TMDB lookup windows (Plex tab); self-contained, see the module docs
+#[path = "gui_lookup.rs"]
+mod lookup_ui;
 use v3::Mode;
 
 use std::collections::BTreeMap;
@@ -313,6 +316,7 @@ pub struct App {
     /// 3.0: Organize or Plex Media tab.
     mode: Mode,
     plex: v3::PlexState,
+    lookup: lookup_ui::LookupState,
     blacklist_editor: Option<v3::BlacklistDraft>,
     favorites_editor: Option<v3::FavoritesDraft>,
     /// TMDB logo for About (approved TMDB artwork, assets/tmdb).
@@ -389,6 +393,7 @@ impl App {
             setup_default_h: None,
             mode: if s.mode == "plex" { Mode::Plex } else { Mode::Organize },
             plex: v3::PlexState::default(),
+            lookup: lookup_ui::LookupState::default(),
             blacklist_editor: None,
             favorites_editor: None,
             tmdb_tex: cc.egui_ctx.load_texture("tmdb-logo", tmdb_image(), egui::TextureOptions::LINEAR),
@@ -1546,6 +1551,7 @@ impl eframe::App for App {
         self.apply_style(&ctx);
         self.poll_worker();
         self.plex_poll();
+        self.lookup_poll(&ctx);
         if self.mode == Mode::Organize {
             self.drive_live_preview(&ctx);
         }
@@ -1600,6 +1606,7 @@ impl eframe::App for App {
 
         self.confirm_dialogs(&ctx);
         self.plex_dialogs(&ctx);
+        self.lookup_windows(&ctx);
         self.blacklist_window(&ctx);
         self.favorites_window(&ctx);
         self.options_window(&ctx);
