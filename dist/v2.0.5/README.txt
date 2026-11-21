@@ -386,4 +386,4 @@ LICENSE
   Public License v3.0 or later. See LICENSE (next to PhotoSorter.exe).
 
 SHA-256 (PhotoSorter.exe)
-  13567e8e8ba429b1192132fe0b61bac49b5a0a4c9e40bd5634397d44b286b048
+  7629968224491dcd8c3125ea103a377d471ce03124030864e442f497310aa3ab
