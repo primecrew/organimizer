@@ -138,6 +138,13 @@ pub struct Analysis {
     pub extra_of_show: bool,
     pub confidence: Confidence,
     pub notes: Vec<String>,
+    /// Plain-language reasons for the decision ("Why" column), in order.
+    pub why: Vec<String>,
+    /// TMDB id of the confirmed movie / show (adds `{tmdb-ID}` to the
+    /// folder name when set).
+    pub tmdb_id: Option<u64>,
+    /// Identity confirmed on TMDB by the user (lookup feature).
+    pub from_tmdb: bool,
 }
 
 impl Analysis {
@@ -157,7 +164,22 @@ impl Analysis {
             extra_of_show: false,
             confidence: Confidence::Low,
             notes: vec![],
+            why: vec![],
+            tmdb_id: None,
+            from_tmdb: false,
         }
+    }
+
+    fn because(&mut self, reason: impl Into<String>) {
+        let r = reason.into();
+        if !r.is_empty() && !self.why.contains(&r) {
+            self.why.push(r);
+        }
+    }
+
+    /// The reasons as one line for the table.
+    pub fn why_text(&self) -> String {
+        self.why.join("; ")
     }
 }
 
@@ -193,7 +215,17 @@ re!(SEASON_IN_NAME, r"(?i)(?:^|[ ._-])(?:s(\d{1,2})|season[ ._-]?(\d{1,2}))(?:$|
 re!(INLINE_EXTRA, r"(?i)-(behindthescenes|deleted|featurette|interview|scene|short|trailer|other)$");
 re!(SAMPLE, r"(?i)(?:^|[ ._\-\[\(])sample(?:$|[ ._\-\]\)])");
 re!(SPACES, r"\s+");
-re!(GENERIC_TRACK, r"(?i)^(?:title|t|track|vts)[ _-]?\d+(?:[ _-]\d+)*$");
+re!(
+    GENERIC_TRACK,
+    r"(?i)^(?:(?:[a-z]{1,2}\d{1,2}|disc ?\d{1,2}|d\d{1,2})[ _-]?)?(?:title|t|track|vts|chapter|clip|segment)[ _-]?\d+(?:[ _-]\d+)*$|^0\d{3,4}$|^\d{5}$"
+);
+// MakeMKV "<DISC_LABEL>_t00" (label = often the movie name)
+re!(DISC_TRACK_SUFFIX, r"(?i)[ _-](?:b\d{1,2}_)?t(\d{2,3})$");
+// folders of a disc structure / multi-disc sets: never the title
+re!(
+    DISC_DIR,
+    r"(?i)^(?:video_ts|audio_ts|bdmv|stream|playlist|clipinf|backup|certificate|meta|jar|bdjo|auxdata|makemkv|(?:disc|disk|dvd|cd|bd|d)[ ._-]?\d{1,2})$"
+);
 re!(
     EDITION_WORDS,
     r"(?i)\b(director'?s[ ._-]cut|extended[ ._-](?:cut|edition)|extended|final[ ._-]cut|theatrical(?:[ ._-]cut)?|unrated|uncut|ultimate[ ._-](?:cut|edition)|special[ ._-]edition|collector'?s[ ._-]edition|anniversary[ ._-]edition|criterion(?:[ ._-]collection)?|remastered|imax(?:[ ._-]edition)?)\b"
@@ -247,7 +279,7 @@ pub fn tidy(s: &str) -> String {
 pub fn smart_case(s: &str) -> String {
     let letters: Vec<char> = s.chars().filter(|c| c.is_alphabetic()).collect();
     let all_lower = letters.iter().all(|c| c.is_lowercase());
-    let all_upper = letters.len() > 4 && letters.iter().all(|c| c.is_uppercase()) && !s.contains('.');
+    let all_upper = letters.len() > 4 && letters.iter().all(|c| c.is_uppercase()) && !s.contains('.') && !s.contains('-');
     if !(all_lower || all_upper) {
         return s.to_string();
     }
@@ -324,7 +356,7 @@ fn find_edition(s: &str) -> Option<String> {
 fn title_and_year(s: &str) -> (String, Option<u16>) {
     let junk = earliest_junk(s, 1, false).unwrap_or(s.len());
     if let Some((a, _, y)) = find_year(s, junk) {
-        let t = tidy(&s[..a]);
+        let t = tidy(s[..a].trim_end_matches([' ', '.', '_', '-', '(', '[']));
         if !t.is_empty() {
             return (smart_case(&t), Some(y));
         }
@@ -382,6 +414,20 @@ fn extra_keyword(s: &str) -> Option<ExtraKind> {
     } else {
         None
     }
+}
+
+/// The extras word found in a name, quoted ("\"making of\""), for the Why text.
+fn keyword_quote(s: &str) -> Option<String> {
+    let l = format!(" {} ", s.to_lowercase().replace(['.', '_', '-', '(', ')', '[', ']'], " "));
+    let l = SPACES.replace_all(&l, " ");
+    [
+        "behind the scenes", "making of", "deleted scenes", "deleted scene", "gag reel", "short film", "trailer",
+        "teaser", "bts", "deleted", "featurette", "featurettes", "interview", "interviews", "bloopers", "blooper",
+        "outtakes", "bonus", "trailers",
+    ]
+    .iter()
+    .find(|w| l.contains(&format!(" {w} ")))
+    .map(|w| format!("\"{w}\""))
 }
 
 const GENERIC_NAMES: &[&str] = &[
@@ -528,19 +574,74 @@ fn extra_analysis(
     folder_title: &str,
     folder_year: Option<u16>,
     conf: Confidence,
+    why: String,
 ) -> Analysis {
     let mut a = Analysis::new(Kind::Extra);
+    a.because(why);
     a.extra = Some(kind);
     a.title = folder_title.to_string();
     a.year = folder_year;
-    let (n, _) = title_and_year(name_part);
-    let n = if n.is_empty() || norm(&n) == norm(folder_title) { kind.singular().to_string() } else { n };
-    a.extra_name = Some(n);
+    a.extra_name = Some(extra_display_name(name_part, kind, folder_title));
     a.confidence = if folder_title.is_empty() { Confidence::Low } else { conf };
     if folder_title.is_empty() {
         a.notes.push("Extra: which movie or show? Enter the title".into());
+    } else {
+        a.because(format!("belongs to {} (folder name)", name_with_year(folder_title, folder_year)));
     }
     a
+}
+
+/// The name an extra gets inside its extras folder: the movie title, year and
+/// release junk are dropped, "Featurette - The Beast Within" keeps only the
+/// description, and a bare keyword ("Deleted Scenes") stays as it is.
+/// `alien making of` -> `Making of`.
+fn extra_display_name(name_part: &str, kind: ExtraKind, movie_title: &str) -> String {
+    let cut = earliest_junk(name_part, 1, false).filter(|&j| j > 0).unwrap_or(name_part.len());
+    let t = tidy(&name_part[..cut]);
+    let mut words: Vec<&str> = t.split_whitespace().collect();
+    // drop the movie title at the start (word by word, ignoring case/punctuation)
+    let title_words: Vec<String> = movie_title.split_whitespace().map(norm).filter(|w| !w.is_empty()).collect();
+    if !title_words.is_empty()
+        && words.len() >= title_words.len()
+        && words.iter().take(title_words.len()).map(|w| norm(w)).eq(title_words.iter().cloned())
+    {
+        words.drain(..title_words.len());
+    }
+    let is_sep = |w: &str| w.chars().all(|c| "-:–|,".contains(c));
+    let is_year = |w: &str| {
+        let d = w.trim_matches(['(', ')', '[', ']']);
+        d.len() == 4 && d.parse::<u16>().is_ok_and(|y| (1900..=2100).contains(&y))
+    };
+    while words.first().is_some_and(|w| is_sep(w) || is_year(w)) {
+        words.remove(0);
+    }
+    while words.last().is_some_and(|w| is_sep(w) || is_year(w)) {
+        words.pop();
+    }
+    let mut rest = words.join(" ");
+    // "Featurette - The Beast Within" -> "The Beast Within"
+    if let Some(kw) = keyword_quote(&rest).map(|q| q.trim_matches('"').to_string()) {
+        let low = rest.to_lowercase();
+        if low.starts_with(&kw) {
+            let after = rest[kw.len()..].trim_start();
+            if let Some(desc) = after.strip_prefix(['-', ':', '–']) {
+                let desc = desc.trim();
+                if !desc.is_empty() {
+                    rest = desc.to_string();
+                }
+            }
+        }
+    }
+    let rest = rest.trim().to_string();
+    if rest.is_empty() || norm(&rest) == norm(movie_title) {
+        return kind.singular().to_string();
+    }
+    let rest = smart_case(&rest);
+    let mut c = rest.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => kind.singular().to_string(),
+    }
 }
 
 /// Analyze one video file. `folders` are the names of the folders that
@@ -555,6 +656,7 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         a.title = tidy(stem);
         a.confidence = Confidence::High;
         a.notes.push("Sample clip: left where it is".into());
+        a.because(if SAMPLE.is_match(stem) { "\"sample\" in the name: a preview clip, not moved" } else { "in a Sample folder: a preview clip, not moved" });
         return a;
     }
 
@@ -562,7 +664,14 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
     let mut season_from_dir = None;
     let mut extra_from_dir = None;
     let mut context: Vec<&str> = vec![];
+    let mut disc_dirs: Vec<&str> = vec![];
     for f in folders.iter().rev() {
+        if DISC_DIR.is_match(f.trim()) {
+            if context.is_empty() {
+                disc_dirs.push(f.as_str());
+            }
+            continue;
+        }
         if let Some(sn) = season_of_dir(f) {
             if season_from_dir.is_none() && context.is_empty() {
                 season_from_dir = Some(sn);
@@ -587,6 +696,18 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         title_and_year(f)
     };
     let folder_title = if looks_generic(&folder_title_raw) { String::new() } else { folder_title_raw };
+    let disc_note = if disc_dirs.is_empty() {
+        String::new()
+    } else {
+        let mut d = disc_dirs.clone();
+        d.reverse();
+        format!("inside a disc rip ({})", d.join("\\"))
+    };
+    // MakeMKV "LABEL_t03": the label is the title, t03 the disc track
+    let (stem, disc_track) = match DISC_TRACK_SUFFIX.captures(stem) {
+        Some(c) if c.get(0).unwrap().start() > 0 => (&stem[..c.get(0).unwrap().start()], c[1].parse::<u32>().ok()),
+        _ => (stem, None),
+    };
 
     // inline Plex suffix: "Name-trailer"
     if let Some(c) = INLINE_EXTRA.captures(stem) {
@@ -601,32 +722,55 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
             _ => ExtraKind::Other,
         };
         let name_part = &stem[..c.get(0).unwrap().start()];
-        return extra_analysis(kind, name_part, &folder_title, folder_year, Confidence::High);
+        let why = format!("name ends in \"{}\" (Plex extras suffix) -> {}", c.get(0).unwrap().as_str(), kind.folder());
+        return extra_analysis(kind, name_part, &folder_title, folder_year, Confidence::High, why);
     }
-    if let Some(kind) = extra_from_dir {
-        return extra_analysis(kind, stem, &folder_title, folder_year, Confidence::High);
+    if let Some(dir_kind) = extra_from_dir {
+        // a generic "Extras" folder: the name can still say which kind
+        let kind = match (dir_kind, extra_keyword(stem)) {
+            (ExtraKind::Other, Some(k)) => k,
+            _ => dir_kind,
+        };
+        let why = if kind == dir_kind {
+            format!("in a \"{parent}\" folder -> {}", kind.folder())
+        } else {
+            format!("in a \"{parent}\" folder and {} in the name -> {}", keyword_quote(stem).unwrap_or_default(), kind.folder())
+        };
+        return extra_analysis(kind, stem, &folder_title, folder_year, Confidence::High, why);
     }
 
     // TV episode?
     let tv = find_tv(stem).or_else(|| season_from_dir.and_then(|_| find_episode_only(stem)));
     if let Some(h) = tv {
         let mut a = Analysis::new(Kind::Episode);
-        let (show, show_year) = title_and_year(&stem[..h.start]);
+        let (show, show_year) = title_and_year(stem[..h.start].trim_end_matches([' ', '.', '_', '-', '[', '(']));
         let show = if looks_generic(&show) { String::new() } else { show };
         a.season = h.season.or(season_from_dir).or(if h.date.is_some() { None } else { Some(1) });
         a.episode = h.episode;
         a.episode_end = h.episode_end.filter(|e| Some(*e) > h.episode);
         a.air_date = h.date;
         let mut conf = if h.strong { Confidence::High } else { Confidence::Medium };
+        let marker = stem[h.start..h.end].trim().to_string();
+        a.because(match (h.date, h.strong) {
+            (Some(_), _) => format!("air date \"{marker}\" in the name -> TV episode (date-based show)"),
+            (None, true) => format!("\"{marker}\" in the name -> TV episode"),
+            (None, false) => format!("number \"{marker}\" inside a Season folder -> episode"),
+        });
+        if let Some(sn) = season_from_dir {
+            a.because(format!("in a \"{parent}\" folder -> Season {sn}"));
+        }
         if h.season.is_none() && season_from_dir.is_none() && h.date.is_none() {
             a.notes.push("No season found: assumed Season 1".into());
             conf = Confidence::Low;
         }
         if !show.is_empty() {
             a.year = show_year.or(if norm(&show) == norm(&folder_title) { folder_year } else { None });
-            if !folder_title.is_empty() && norm(&show) == norm(&folder_title) {
+            let (ns, nf) = (norm(&show), norm(&folder_title));
+            if !folder_title.is_empty() && (ns == nf || (ns.len() >= 4 && nf.ends_with(&ns))) {
                 a.title = folder_title.clone(); // keep the folder's spelling / case
+                a.because(format!("show name \"{}\" in the name matches the folder", a.title));
             } else {
+                a.because(format!("show name \"{show}\" from the file name"));
                 a.title = show;
             }
         } else if !folder_title.is_empty() {
@@ -635,13 +779,14 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
             if h.strong {
                 a.notes.push("Show name taken from the folder".into());
             }
+            a.because(format!("show name from the folder \"{folder_name}\""));
             conf = conf.min(if h.strong { Confidence::High } else { Confidence::Medium });
         } else {
             a.notes.push("Show name not found: please enter it".into());
             conf = Confidence::Low;
         }
         // episode title: text after the episode marker, up to the junk
-        let rest = &stem[h.end..];
+        let rest = stem[h.end..].trim_start_matches([']', ')']);
         let cut = earliest_junk(rest, 0, true).unwrap_or(rest.len());
         let et = tidy(&rest[..cut]);
         if !et.is_empty() && et.chars().any(char::is_alphabetic) && !looks_generic(&et) {
@@ -649,6 +794,9 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         }
         if a.season == Some(0) {
             a.notes.push("Special: Season 00".into());
+        }
+        if let Some(t) = &a.episode_title {
+            a.because(format!("episode title \"{t}\" after the episode number"));
         }
         a.confidence = conf;
         return a;
@@ -661,14 +809,25 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
     if let Some(kind) = kw
         && year.is_none()
     {
-        return extra_analysis(kind, stem, &folder_title, folder_year, Confidence::Medium);
+        let why = format!("{} in the name -> {}", keyword_quote(stem).unwrap_or_default(), kind.folder());
+        return extra_analysis(kind, stem, &folder_title, folder_year, Confidence::Medium, why);
     }
 
     let mut a = Analysis::new(Kind::Movie);
     a.edition = find_edition(stem).or_else(|| find_edition(folder_name));
-    let generic = looks_generic(&title);
+    let generic = looks_generic(&title) || (disc_track.is_some() && year.is_none() && !folder_title.is_empty());
+    a.because("no episode number or extras keyword -> movie");
+    if !disc_note.is_empty() {
+        a.because(disc_note.clone());
+    }
+    if let Some(t) = disc_track {
+        a.because(format!("disc-rip track name (track {t}): the name is the disc label, not a title"));
+    } else if looks_generic(&title) {
+        a.because(format!("\"{stem}\" is a generic / disc track name, so the folder decides"));
+    }
     match (generic, year, folder_year) {
         (false, Some(y), fy) => {
+            a.because(format!("title \"{title}\" and year {y} from the file name"));
             a.title = title;
             a.year = Some(y);
             if fy.is_some() && fy != Some(y) && !folder_title.is_empty() {
@@ -682,14 +841,17 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
             a.title = folder_title.clone();
             a.year = Some(fy);
             a.confidence = Confidence::High;
+            a.because(format!("the folder \"{folder_name}\" has the same title and the year {fy}"));
         }
         (_, _, Some(fy)) if !folder_title.is_empty() => {
             a.title = folder_title.clone();
             a.year = Some(fy);
             a.confidence = Confidence::Medium;
             a.notes.push("Title and year taken from the folder".into());
+            a.because(format!("title and year from the folder \"{folder_name}\""));
         }
         (false, None, None) => {
+            a.because(format!("title \"{title}\" from the file name, no year anywhere"));
             a.title = title;
             a.confidence = Confidence::Low;
             a.notes.push("No year found: add it, or look it up on TMDB".into());
@@ -700,7 +862,11 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
             a.notes.push("Could not identify this file".into());
         }
     }
+    if let Some(e) = &a.edition {
+        a.because(format!("edition \"{e}\" in the name"));
+    }
     if kw.is_some() {
+        a.because(format!("{} in the name, but it has its own year: kept as a movie", keyword_quote(stem).unwrap_or_default()));
         a.notes.push("Name mentions an extra (trailer, interview...): check the type".into());
         a.confidence = a.confidence.min(Confidence::Medium);
     }
@@ -967,6 +1133,8 @@ pub struct Row {
     pub sub_tags: Vec<String>,
     /// Included in Apply.
     pub include: bool,
+    /// Runtime in seconds from the container header (None = unknown).
+    pub duration: Option<u64>,
 }
 
 /// Folder names from `root` (its own name first) down to the file's parent.
@@ -1009,12 +1177,14 @@ pub fn analyze_files(root: &Path, files: &[PathBuf]) -> Vec<Row> {
                 analysis: a,
                 subtitle_of: None,
                 sub_tags: vec![],
+                duration: crate::duration::media_duration(f),
             });
         } else if is_subtitle(ext) {
             subs.push(f);
         }
     }
     link_extras(&mut rows);
+    refine_by_runtime(&mut rows);
     let videos = rows.len();
     for s in subs {
         let (video, tags) = match_subtitle(s, &rows[..videos]);
@@ -1034,6 +1204,7 @@ pub fn analyze_files(root: &Path, files: &[PathBuf]) -> Vec<Row> {
             analysis: a,
             subtitle_of: video,
             sub_tags: tags,
+            duration: None,
         });
     }
     rows
@@ -1083,13 +1254,20 @@ fn link_extras(rows: &mut [Row]) {
                     mains.iter().find(|(d, _, a)| a.kind == Kind::Episode && d.parent() == Some(pd.as_path()))
                 })
             });
-        let Some((_, _, m)) = main else { continue };
+        let Some((_, msrc, m)) = main else { continue };
+        let main_name = msrc.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         if keyword_movie {
             if norm(&r.analysis.title) != norm(&m.title) || (r.analysis.year.is_some() && r.analysis.year != m.year) {
                 continue;
             }
             let Some(kind) = kw else { continue };
-            let mut a = extra_analysis(kind, &stem, &m.title, m.year, Confidence::Medium);
+            let why = format!(
+                "{} in the name, next to {} -> {}",
+                keyword_quote(&stem).unwrap_or_default(),
+                main_name,
+                kind.folder()
+            );
+            let mut a = extra_analysis(kind, &stem, &m.title, m.year, Confidence::Medium, why);
             let rest = norm(&tidy(&stem)).replacen(&norm(&m.title), "", 1);
             let rest = rest.replacen(&m.year.map(|y| y.to_string()).unwrap_or_default(), "", 1);
             if rest == norm(kind.singular()) || rest.is_empty() {
@@ -1105,8 +1283,10 @@ fn link_extras(rows: &mut [Row]) {
         a.title = m.title.clone();
         a.year = m.year;
         a.extra_of_show = m.kind == Kind::Episode;
-        if a.extra_name.as_deref().map(norm) == Some(norm(&m.title)) {
-            a.extra_name = a.extra.map(|k| k.singular().to_string());
+        if let (Some(k), Some(n)) = (a.extra, a.extra_name.clone())
+            && norm(&n).starts_with(&norm(&m.title))
+        {
+            a.extra_name = Some(extra_display_name(&n, k, &m.title));
         }
         if before.is_empty() || norm(&before) == norm(&m.title) {
             a.confidence = a.confidence.max(Confidence::Medium);
@@ -1115,7 +1295,128 @@ fn link_extras(rows: &mut [Row]) {
             }
         }
         a.notes.retain(|n| !n.starts_with("Extra: which"));
+        a.why.retain(|w| !w.starts_with("belongs to "));
+        a.because(format!("belongs to {} ({main_name} is next to it)", name_with_year(&m.title, m.year)));
         r.detected = r.analysis.clone();
+    }
+}
+
+/// Disc root of a file: its folder, or the folder above a disc structure
+/// (`Movie/BDMV/STREAM/00001.m2ts` -> `Movie`).
+fn unit_dir(p: &Path) -> PathBuf {
+    let mut d = dir_of(p);
+    while d.file_name().is_some_and(|n| DISC_DIR.is_match(n.to_string_lossy().trim())) {
+        match d.parent() {
+            Some(x) => d = x.to_path_buf(),
+            None => break,
+        }
+    }
+    d
+}
+
+fn size_label(n: u64) -> String {
+    if n >= 1 << 30 {
+        format!("{:.1} GB", n as f64 / (1u64 << 30) as f64)
+    } else if n >= 1 << 20 {
+        format!("{} MB", n >> 20)
+    } else {
+        format!("{} KB", (n >> 10).max(1))
+    }
+}
+
+/// Extras type from the runtime alone (no keyword, no extras folder).
+fn extra_kind_by_runtime(secs: u64) -> (ExtraKind, &'static str) {
+    if secs <= 150 {
+        (ExtraKind::Trailers, "very short, like a trailer")
+    } else if secs <= 45 * 60 {
+        (ExtraKind::Featurettes, "short bonus feature")
+    } else {
+        (ExtraKind::Other, "long, but shorter than the main feature (alternate cut?)")
+    }
+}
+
+/// Several files that look like the same movie in one folder / disc rip:
+/// the longest is the main feature, the others become its extras. Extras
+/// get their runtime in the Why text. Different editions stay movies.
+fn refine_by_runtime(rows: &mut [Row]) {
+    let mut groups: HashMap<(PathBuf, String, Option<u16>), Vec<usize>> = HashMap::new();
+    for (i, r) in rows.iter().enumerate() {
+        if r.analysis.kind == Kind::Movie && !r.analysis.title.is_empty() && r.analysis.edition.is_none() {
+            groups.entry((unit_dir(&r.source), norm(&r.analysis.title), r.analysis.year)).or_default().push(i);
+        }
+    }
+    for idx in groups.into_values().filter(|v| v.len() > 1) {
+        let durations: Option<Vec<(usize, u64)>> = idx.iter().map(|&i| rows[i].duration.map(|d| (i, d))).collect();
+        let sizes: Option<Vec<(usize, u64)>> = idx
+            .iter()
+            .map(|&i| std::fs::metadata(&rows[i].source).ok().map(|m| (i, m.len())).filter(|(_, n)| *n > 0))
+            .collect();
+        let (measure, by_runtime) = match (durations, sizes) {
+            (Some(d), _) => (d, true),
+            (None, Some(s)) => (s, false),
+            _ => {
+                for &i in &idx {
+                    let a = &mut rows[i].analysis;
+                    a.confidence = a.confidence.min(Confidence::Low);
+                    a.notes.push("Several files look like this movie: mark which ones are extras".into());
+                    rows[i].detected = rows[i].analysis.clone();
+                }
+                continue;
+            }
+        };
+        let fmt = |v: u64| if by_runtime { crate::duration::label(v) } else { size_label(v) };
+        let &(main, main_v) = measure.iter().max_by_key(|(_, d)| *d).unwrap();
+        let main_name = rows[main].source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let (title, year) = (rows[main].analysis.title.clone(), rows[main].analysis.year);
+        rows[main].analysis.because(format!(
+            "{} of {} files for this title ({}) -> main feature",
+            if by_runtime { "longest" } else { "largest" },
+            idx.len(),
+            fmt(main_v)
+        ));
+        rows[main].detected = rows[main].analysis.clone();
+        for &(i, v) in measure.iter().filter(|(i, _)| *i != main) {
+            let stem = file_stem_of(&rows[i].source);
+            let (kind, why_kind, conf) = match extra_keyword(&stem) {
+                Some(k) => (k, format!("{} in the name", keyword_quote(&stem).unwrap_or_default()), Confidence::Medium),
+                None if by_runtime => {
+                    let (k, w) = extra_kind_by_runtime(v);
+                    (k, w.to_string(), Confidence::Medium)
+                }
+                None => (ExtraKind::Other, "runtime unknown, so the type is a guess".to_string(), Confidence::Low),
+            };
+            let old_why = rows[i].analysis.why.clone();
+            let why = format!(
+                "{} ({}) than {} ({}) with the same title -> extra; {} -> {}",
+                if by_runtime { "shorter" } else { "smaller" },
+                fmt(v),
+                main_name,
+                fmt(main_v),
+                why_kind,
+                kind.folder()
+            );
+            let mut a = extra_analysis(kind, &stem, &title, year, conf, why);
+            // keep the disc-rip reasons, drop "-> movie"
+            for w in old_why.into_iter().filter(|w| w.starts_with("inside a disc rip") || w.starts_with("disc-rip track")) {
+                a.because(w);
+            }
+            if looks_generic(&stem) || DISC_TRACK_SUFFIX.is_match(&stem) || a.extra_name.as_deref().map(norm) == Some(norm(&title)) {
+                let n = if by_runtime { crate::duration::label(v).replace(':', ".") } else { stem.clone() };
+                a.extra_name = Some(format!("{} {n}", kind.singular()));
+            }
+            rows[i].analysis = a;
+            rows[i].detected = rows[i].analysis.clone();
+        }
+    }
+    // runtime in the Why text of every other extra
+    for r in rows.iter_mut() {
+        if r.analysis.kind == Kind::Extra
+            && let Some(d) = r.duration
+            && !r.analysis.why.iter().any(|w| w.contains(&crate::duration::label(d)))
+        {
+            r.analysis.why.insert(0, format!("runtime {}", crate::duration::label(d)));
+            r.detected = r.analysis.clone();
+        }
     }
 }
 
@@ -1136,6 +1437,33 @@ fn match_subtitle(sub: &Path, videos: &[Row]) -> (Option<usize>, Vec<String>) {
     }
     if let Some((i, l)) = best {
         return (Some(i), subtitle_tags(&stem[l..]));
+    }
+    // same name with other separators: "Alien.1979.en.srt" next to
+    // "Alien (1979).mkv" (one video only, so nothing is guessed)
+    let ns = norm(&stem);
+    let loose: Vec<(usize, usize)> = videos
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| dir_of(&r.source) == dir)
+        .filter_map(|(i, r)| {
+            let nv = norm(&file_stem_of(&r.source));
+            (nv.len() >= 3 && ns.starts_with(&nv)).then_some((i, nv.chars().count()))
+        })
+        .collect();
+    if let [(i, n)] = loose[..] {
+        // byte offset in the subtitle stem after `n` letters/digits
+        let mut seen = 0;
+        let mut cut = stem.len();
+        for (b, c) in stem.char_indices() {
+            if seen == n {
+                cut = b;
+                break;
+            }
+            if c.is_alphanumeric() {
+                seen += c.to_lowercase().count();
+            }
+        }
+        return (Some(i), subtitle_tags(&stem[cut..]));
     }
     let is_subs = |p: &Path| p.file_name().is_some_and(|n| is_subs_dir(&n.to_string_lossy()));
     let (subs_dir, named) = if is_subs(&dir) {
@@ -1443,8 +1771,8 @@ mod tests {
             ("Movies/Heat (1995)/Extras/Gag Reel.mkv", "Heat (1995)/Other/Gag Reel.mkv"),
             ("Movies/Heat (1995)/Heat-trailer.mp4", "Heat (1995)/Trailers/Trailer.mp4"),
             ("Movies/Heat (1995)/Final Showdown-scene.mp4", "Heat (1995)/Scenes/Final Showdown.mp4"),
-            ("Movies/Heat (1995)/Heat Teaser.mp4", "Heat (1995)/Trailers/Heat Teaser.mp4"),
-            ("Movies/Heat (1995)/heat deleted scene 2.mkv", "Heat (1995)/Deleted Scenes/Heat Deleted Scene 2.mkv"),
+            ("Movies/Heat (1995)/Heat Teaser.mp4", "Heat (1995)/Trailers/Teaser.mp4"),
+            ("Movies/Heat (1995)/heat deleted scene 2.mkv", "Heat (1995)/Deleted Scenes/Deleted Scene 2.mkv"),
         ];
         for (input, want) in cases {
             assert_eq!(rel(input), want, "{input}");
@@ -1628,5 +1956,130 @@ mod tests {
         assert!(u.errors.is_empty(), "{:?}", u.errors);
         assert!(root.join("Heat.1995.1080p.mkv").is_file() && root.join("mystery file.mkv").is_file());
         assert!(!root.join("Mystery").exists(), "folders created by Apply are removed by Undo");
+    }
+}
+
+#[cfg(test)]
+mod recognition_tests {
+    use super::*;
+
+    /// Minimal Matroska header with the given duration (seconds).
+    fn mkv(secs: f64) -> Vec<u8> {
+        fn el(id: &[u8], payload: &[u8]) -> Vec<u8> {
+            let mut v = id.to_vec();
+            v.push(0x01);
+            v.extend_from_slice(&(payload.len() as u64).to_be_bytes()[1..]);
+            v.extend_from_slice(payload);
+            v
+        }
+        let header = el(&[0x1A, 0x45, 0xDF, 0xA3], &el(&[0x42, 0x82], b"matroska"));
+        let info = el(
+            &[0x15, 0x49, 0xA9, 0x66],
+            &[el(&[0x2A, 0xD7, 0xB1], &1_000_000u32.to_be_bytes()), el(&[0x44, 0x89], &(secs * 1000.0).to_be_bytes())]
+                .concat(),
+        );
+        [header, el(&[0x18, 0x53, 0x80, 0x67], &info)].concat()
+    }
+
+    fn write(root: &Path, rel: &str, bytes: &[u8]) -> PathBuf {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, bytes).unwrap();
+        p
+    }
+
+    fn rel_of(r: &Row) -> String {
+        let name = r.source.file_name().unwrap().to_string_lossy().into_owned();
+        let (_, ext) = split_name(&name);
+        relative_path(&r.analysis, ext).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default()
+    }
+
+    fn row<'a>(rows: &'a [Row], end: &str) -> &'a Row {
+        rows.iter().find(|r| r.source.to_string_lossy().replace('\\', "/").ends_with(end)).unwrap()
+    }
+
+    #[test]
+    fn makemkv_rip_longest_track_is_the_movie() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("Rips");
+        let files = vec![
+            write(&root, "Alien (1979)/title_t00.mkv", &mkv(7020.0)),
+            write(&root, "Alien (1979)/title_t01.mkv", &mkv(480.0)),
+            write(&root, "Alien (1979)/title_t02.mkv", &mkv(130.0)),
+            write(&root, "Alien (1979)/title_t03.mkv", &mkv(3900.0)),
+        ];
+        let rows = analyze_files(&root, &files);
+        let main = row(&rows, "title_t00.mkv");
+        assert_eq!(rel_of(main), "Alien (1979)/Alien (1979).mkv");
+        assert!(main.analysis.why_text().contains("longest of 4 files"), "{}", main.analysis.why_text());
+        let t1 = row(&rows, "title_t01.mkv");
+        assert_eq!(t1.analysis.extra, Some(ExtraKind::Featurettes));
+        assert_eq!(rel_of(t1), "Alien (1979)/Featurettes/Featurette 8.00.mkv");
+        assert!(t1.analysis.why_text().contains("shorter (8:00) than title_t00.mkv (1:57:00)"), "{}", t1.analysis.why_text());
+        assert_eq!(row(&rows, "title_t02.mkv").analysis.extra, Some(ExtraKind::Trailers));
+        assert_eq!(row(&rows, "title_t03.mkv").analysis.extra, Some(ExtraKind::Other));
+    }
+
+    #[test]
+    fn disc_label_track_names_and_bdmv_structure() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("Rips");
+        let files = vec![
+            write(&root, "Gladiator (2000)/GLADIATOR_t00.mkv", &mkv(9300.0)),
+            write(&root, "Gladiator (2000)/GLADIATOR_t05.mkv", &mkv(1260.0)),
+            // BDMV: no runtime parser for m2ts, the largest file wins
+            write(&root, "Heat (1995)/BDMV/STREAM/00001.m2ts", &vec![0u8; 50_000]),
+            write(&root, "Heat (1995)/BDMV/STREAM/00002.m2ts", &vec![0u8; 3_000]),
+            write(&root, "Heat (1995)/BDMV/STREAM/00003 Trailer.m2ts", &vec![0u8; 2_000]),
+        ];
+        let rows = analyze_files(&root, &files);
+        let g = row(&rows, "GLADIATOR_t00.mkv");
+        assert_eq!(rel_of(g), "Gladiator (2000)/Gladiator (2000).mkv");
+        assert!(g.analysis.why_text().contains("disc-rip track name"), "{}", g.analysis.why_text());
+        assert_eq!(row(&rows, "GLADIATOR_t05.mkv").analysis.extra, Some(ExtraKind::Featurettes));
+        let heat = row(&rows, "00001.m2ts");
+        assert_eq!(rel_of(heat), "Heat (1995)/Heat (1995).m2ts");
+        assert!(heat.analysis.why_text().contains("inside a disc rip (BDMV\\STREAM)"), "{}", heat.analysis.why_text());
+        assert!(heat.analysis.why_text().contains("largest of 2 files"), "{}", heat.analysis.why_text());
+        let small = row(&rows, "00002.m2ts");
+        assert_eq!(small.analysis.kind, Kind::Extra);
+        assert_eq!(small.analysis.confidence, Confidence::Low);
+        assert_eq!(row(&rows, "00003 Trailer.m2ts").analysis.extra, Some(ExtraKind::Trailers));
+    }
+
+    #[test]
+    fn keyword_extra_next_to_its_movie_explains_itself() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("Movies");
+        let files = vec![
+            write(&root, "Alien (1979)/Alien (1979).mkv", &mkv(7020.0)),
+            write(&root, "Alien (1979)/Alien - Making of.mkv", &mkv(480.0)),
+            write(&root, "Alien (1979)/Deleted Scenes/Chestburster alt.mkv", &mkv(200.0)),
+        ];
+        let rows = analyze_files(&root, &files);
+        let m = row(&rows, "Alien - Making of.mkv");
+        assert_eq!(m.analysis.extra, Some(ExtraKind::BehindTheScenes));
+        assert_eq!(rel_of(m), "Alien (1979)/Behind The Scenes/Making of.mkv");
+        let why = m.analysis.why_text();
+        assert!(why.contains("runtime 8:00") && why.contains("\"making of\"") && why.contains("Alien (1979).mkv"), "{why}");
+        let del = row(&rows, "Chestburster alt.mkv");
+        assert_eq!(rel_of(del), "Alien (1979)/Deleted Scenes/Chestburster alt.mkv");
+        assert!(del.analysis.why_text().contains("in a \"Deleted Scenes\" folder"), "{}", del.analysis.why_text());
+        // the movie is not touched by the runtime rule (only one file has its title)
+        assert!(!row(&rows, "Alien (1979).mkv").analysis.why_text().contains("longest"));
+    }
+
+    #[test]
+    fn episodes_explain_season_and_show() {
+        let a = analyze(
+            &["TV".into(), "The Expanse".into(), "Season 2".into()],
+            "The.Expanse.S02E05.Home.1080p.mkv",
+        );
+        let why = a.why_text();
+        assert!(why.contains("\"S02E05\" in the name -> TV episode"), "{why}");
+        assert!(why.contains("Season 2"), "{why}");
+        assert!(why.contains("episode title \"Home\""), "{why}");
+        let w = analyze(&["Shows".into(), "Lost".into(), "Season 1".into()], "Episode 4.mkv").why_text();
+        assert!(w.contains("inside a Season folder") && w.contains("show name from the folder"), "{w}");
     }
 }
