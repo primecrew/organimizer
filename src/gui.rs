@@ -30,7 +30,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Layout, Margin, RichText,
+    self, Align, Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Layout, Margin, RichText,
     Stroke, TextStyle, Vec2,
 };
 use egui_extras::{Column, TableBuilder};
@@ -1837,7 +1837,7 @@ impl App {
                         ui.close();
                         self.open_help();
                     }
-                    if ui.button("About PrimeCrew Organimizer…").on_hover_text("Version, publisher and build notes").clicked() {
+                    if ui.button("About Organimizer…").on_hover_text("Version, publisher and build notes").clicked() {
                         ui.close();
                         self.dialog = Some(Dialog::About);
                     }
@@ -3663,7 +3663,64 @@ impl App {
         }
     }
 
+    fn about_window(&mut self, ctx: &egui::Context) {
+        // Tweakinator-style About: centred window, icon, name, Version, "by PrimeCrew Software",
+        // short description, copyright + license, then a single Close. TMDB attribution stays
+        // because this app can call the TMDB API.
+        let mut stay = true;
+        let mut close = false;
+        egui::Window::new(format!("About {}", about::PRODUCT))
+            .open(&mut stay)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+            .default_width(440.0)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add(egui::Image::new(&self.icon_tex).fit_to_exact_size(Vec2::splat(72.0)));
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(about::PRODUCT).heading().strong());
+                    ui.label(RichText::new(format!("Version {}", about::VERSION)).weak());
+                    ui.label(RichText::new(format!("by {}", about::PUBLISHER)).weak());
+                    ui.add_space(8.0);
+                    ui.add(egui::Label::new(format!("{} on Windows 10/11.", about::DESCRIPTION)).wrap());
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(RichText::new(about::ABOUT_NOTE).small().weak()).wrap());
+                    ui.label(RichText::new(about::copyright()).small().weak());
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let r = ui.add(
+                            egui::Image::new(&self.tmdb_tex)
+                                .fit_to_exact_size(Vec2::new(123.5, 16.0))
+                                .sense(egui::Sense::click()),
+                        );
+                        if r.on_hover_text(organimizer::tmdb::WEBSITE).clicked() {
+                            let _ = desktop::open_known_url(organimizer::tmdb::WEBSITE);
+                        }
+                    });
+                    ui.add(egui::Label::new(RichText::new(organimizer::tmdb::ATTRIBUTION).small().weak()).wrap());
+                    if ui.link(RichText::new(organimizer::tmdb::WEBSITE).small()).clicked() {
+                        let _ = desktop::open_known_url(organimizer::tmdb::WEBSITE);
+                    }
+                    ui.add_space(12.0);
+                    let close_btn = egui::Button::new(RichText::new("Close").strong().color(Color32::WHITE))
+                        .fill(accent(ui))
+                        .min_size(Vec2::new(180.0, 32.0));
+                    if ui.add(close_btn).clicked() {
+                        close = true;
+                    }
+                });
+            });
+        if close || !stay {
+            self.dialog = None;
+        }
+    }
+
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if matches!(self.dialog, Some(Dialog::About)) {
+            self.about_window(ctx);
+            return;
+        }
         let Some(mut d) = self.dialog.take() else { return };
         let mut keep = true;
         let fs = self.s.font_size;
@@ -3801,66 +3858,7 @@ impl App {
                         }
                     });
                 }
-                Dialog::About => {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Image::new(&self.icon_tex).fit_to_exact_size(Vec2::splat(64.0)));
-                        ui.add_space(8.0);
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(about::PRODUCT).size(fs * 1.8).strong());
-                            ui.label(RichText::new(format!("Version {}", about::VERSION)).strong());
-                            ui.label(RichText::new(about::PUBLISHER).color(accent(ui)));
-                        });
-                    });
-                    ui.add_space(8.0);
-                    ui.label(format!("{} on Windows 10/11.", about::DESCRIPTION));
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(about::DISTRIBUTION_NOTE).weak());
-                    ui.add_space(4.0);
-                    let where_ = match &self.ini_path {
-                        Some(p) => format!("Settings: {}", p.display()),
-                        None => "Settings: not saved (folder not writable)".to_string(),
-                    };
-                    ui.label(RichText::new(where_).weak().small());
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(
-                            "Only the file types you choose are touched; programs, scripts and system files never. \
-                             Preview before Apply, Undo after; nothing is ever overwritten or deleted.",
-                        )
-                        .weak(),
-                    );
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        let r = ui.add(
-                            egui::Image::new(&self.tmdb_tex)
-                                .fit_to_exact_size(Vec2::new(fs * 6.0, fs * 6.0 * 32.0 / 247.0))
-                                .sense(egui::Sense::click()),
-                        );
-                        if r.on_hover_text(organimizer::tmdb::WEBSITE).clicked() {
-                            let _ = desktop::open_known_url(organimizer::tmdb::WEBSITE);
-                        }
-                        ui.vertical(|ui| {
-                            ui.label(RichText::new(organimizer::tmdb::ATTRIBUTION).small());
-                            if ui.link(RichText::new(organimizer::tmdb::WEBSITE).small()).clicked() {
-                                let _ = desktop::open_known_url(organimizer::tmdb::WEBSITE);
-                            }
-                        });
-                    });
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(about::copyright()).small());
-                    ui.label(RichText::new(about::LICENSE_LINE).small())
-                        .on_hover_text("GNU General Public License v3.0 or later; full text in LICENSE next to the exe");
-                    ui.add_space(8.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Close").clicked() {
-                            keep = false;
-                        }
-                        if ui.button("Help (F1)").on_hover_text(format!("Open {}", desktop::HELP_NAME)).clicked() {
-                            keep = false;
-                            self.open_help();
-                        }
-                    });
-                }
+                Dialog::About => unreachable!("About is drawn as its own window"),
                 Dialog::Message { title, text } => {
                     ui.heading(title.as_str());
                     ui.add_space(4.0);

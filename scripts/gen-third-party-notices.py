@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write THIRD-PARTY-NOTICES.txt for the Windows build of PrimeCrew Organimizer.
+"""Write THIRD-PARTY-NOTICES.txt for the Windows build of Organimizer.
 
 Lists every crate compiled into Organimizer.exe (x86_64-pc-windows-gnu,
 default features; build scripts and proc-macros included, dev-only crates
@@ -59,9 +59,9 @@ def read(f):
     return f.read_text(encoding="utf-8", errors="replace").strip("\n").replace("\r\n", "\n")
 
 L = []
-L.append("PrimeCrew Organimizer - third-party notices")
+L.append("Organimizer - third-party notices")
 L.append("=" * 72)
-L.append("PrimeCrew Organimizer (formerly PhotoSorter) is Copyright (C) 2026")
+L.append("Organimizer (formerly PhotoSorter) is Copyright (C) 2026")
 L.append("PrimeCrew Software and licensed under")
 L.append("the GNU General Public License v3.0 or later (see LICENSE).")
 L.append("")

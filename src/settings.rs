@@ -36,6 +36,9 @@ pub const APPDATA_SUBDIR: [&str; 2] = ["PrimeCrew Software", "Organimizer"];
 /// PhotoSorter 2.x settings, imported once (never modified or deleted).
 pub const LEGACY_INI_NAME: &str = "PhotoSorter.ini";
 pub const LEGACY_APPDATA_SUBDIR: [&str; 2] = ["PrimeCrew Software", "PhotoSorter"];
+/// 3.0.0/3.0.1 display name. Settings always lived in [`APPDATA_SUBDIR`]; if a
+/// folder with this name exists it is imported once and never deleted.
+pub const PREV_DISPLAY_APPDATA_SUBDIR: [&str; 2] = ["PrimeCrew Software", "PrimeCrew Organimizer"];
 pub const DEFAULT_TMDB_LANGUAGE: &str = "en-US";
 
 /// Plex tab settings (`[Plex]`, 3.0).
@@ -649,7 +652,7 @@ impl Settings {
         let one = |s: &str| s.replace(['\r', '\n'], " ");
         format!(
             r#"; ===========================================================================
-; PrimeCrew Organimizer settings
+; Organimizer settings
 ; ---------------------------------------------------------------------------
 ; This file is the ONLY place Organimizer stores settings (no registry). It
 ; lives next to Organimizer.exe (portable copy) or, when Organimizer was
@@ -1078,6 +1081,22 @@ pub fn ini_path() -> Option<PathBuf> {
     exe_dir().map(|d| choose_ini_path(&d, appdata_dir().as_deref()).0)
 }
 
+/// `Organimizer.ini` in a `%APPDATA%\PrimeCrew Software\PrimeCrew Organimizer`
+/// folder, if someone ever used the 3.0.0/3.0.1 display name as the folder.
+/// The official path was always `...\Organimizer`; this is only a fallback.
+pub fn previous_display_ini_paths(appdata: Option<&Path>) -> Vec<PathBuf> {
+    appdata
+        .map(|a| {
+            let mut p = a.to_path_buf();
+            for part in PREV_DISPLAY_APPDATA_SUBDIR {
+                p.push(part);
+            }
+            p.join(INI_NAME)
+        })
+        .into_iter()
+        .collect()
+}
+
 /// Where PhotoSorter 2.x kept its settings, most likely first: for an
 /// installed copy the 2.x AppData file, for a portable copy the INI next to
 /// the exe (an Organimizer.exe unzipped into the old PhotoSorter folder).
@@ -1102,7 +1121,9 @@ pub fn ini_path_and_legacy() -> (Option<PathBuf>, Vec<PathBuf>) {
         Some(d) => {
             let app = appdata_dir();
             let (p, mode) = choose_ini_path(&d, app.as_deref());
-            (Some(p), legacy_ini_paths(&d, app.as_deref(), mode))
+            let mut imports = previous_display_ini_paths(app.as_deref());
+            imports.extend(legacy_ini_paths(&d, app.as_deref(), mode));
+            (Some(p), imports)
         }
         None => (None, vec![]),
     }
@@ -1138,10 +1159,14 @@ pub fn load_or_import(path: Option<PathBuf>, legacy: &[PathBuf]) -> Loaded {
             let _ = std::fs::create_dir_all(dir);
         }
         let saved = save(p, &settings).is_ok();
+        let from_photosorter = old.file_name().is_some_and(|n| n == std::ffi::OsStr::new(LEGACY_INI_NAME));
+        let what = if from_photosorter { "PhotoSorter settings and presets" } else { "settings and presets" };
         let notice = Some(if saved {
-            format!("Imported PhotoSorter settings and presets from {} (the old file was left as it is).", old.display())
-        } else {
+            format!("Imported {what} from {} (the old file was left as it is).", old.display())
+        } else if from_photosorter {
             format!("Using PhotoSorter settings from {} (could not save {}).", old.display(), INI_NAME)
+        } else {
+            format!("Using settings from {} (could not save {}).", old.display(), INI_NAME)
         });
         return Loaded { settings, path: saved.then(|| p.clone()), notice };
     }
@@ -1808,5 +1833,37 @@ mod tests {
         let l4 = load_or_import(Some(none.path().join(INI_NAME)), &[none.path().join(LEGACY_INI_NAME)]);
         assert!(l4.notice.is_none());
         assert_eq!(l4.settings.last_folder, "");
+    }
+
+    #[test]
+    fn previous_display_name_settings_folder_is_imported_and_never_deleted() {
+        let exe = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        let old_dir = app.path().join("PrimeCrew Software").join("PrimeCrew Organimizer");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        let mut old = Settings::default();
+        old.last_folder = "D:\\Movies".into();
+        let old_path = old_dir.join(INI_NAME);
+        std::fs::write(&old_path, old.to_ini()).unwrap();
+        std::fs::write(exe.path().join(INSTALLED_MARKER), b"").unwrap();
+        let (new_path, mode) = choose_ini_path(exe.path(), Some(app.path()));
+        assert_eq!(mode, SettingsMode::AppData);
+        assert_eq!(new_path, app.path().join("PrimeCrew Software").join("Organimizer").join(INI_NAME));
+        let imports = {
+            let mut v = previous_display_ini_paths(Some(app.path()));
+            v.extend(legacy_ini_paths(exe.path(), Some(app.path()), mode));
+            v
+        };
+        assert_eq!(imports[0], old_path);
+        let l = load_or_import(Some(new_path.clone()), &imports);
+        assert!(l.notice.as_deref().unwrap_or_default().contains("Imported settings and presets"));
+        assert_eq!(l.settings.last_folder, "D:\\Movies");
+        assert!(new_path.is_file());
+        assert_eq!(std::fs::read_to_string(&old_path).unwrap(), old.to_ini());
+        // the official Organimizer folder is used after that; the old folder stays
+        let l2 = load_or_import(Some(new_path.clone()), &imports);
+        assert!(l2.notice.is_none());
+        assert_eq!(l2.settings.last_folder, "D:\\Movies");
+        assert!(old_path.is_file());
     }
 }

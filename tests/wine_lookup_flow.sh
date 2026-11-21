@@ -31,7 +31,7 @@ wine "$EXE" >/dev/null 2>&1 &
 APP=$!
 sleep 15
 
-win() { xdotool search --onlyvisible --name "PrimeCrew Organimizer" | head -1; }
+win() { xdotool search --onlyvisible --name "Organimizer" | head -1; }
 # click at 1024x640 preview coordinates (x1.5625)
 click() {
   xdotool windowactivate --sync "$(win)" 2>/dev/null || true

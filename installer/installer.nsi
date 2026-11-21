@@ -1,4 +1,4 @@
-; PrimeCrew Organimizer Windows installer (NSIS 3, cross-built on Linux with makensis).
+; Organimizer Windows installer (NSIS 3, cross-built on Linux with makensis).
 ; Modelled on the Encode FFS installer (same layout, brand folder and modes).
 ; All identity values come from scripts/build-release.sh (-D...).
 ;
@@ -11,11 +11,16 @@
 ;   setup asks you to close it first.
 ; - 3.0 rename: an installed PhotoSorter (2.x, <LEGACY_ID> uninstall entry) counts as an
 ;   upgrade. The banner reads "Updating existing installation: PhotoSorter v2.0.5 →
-;   PrimeCrew Organimizer v3.0.1"; Organimizer goes next to it (...\PhotoSorter →
+;   Organimizer v3.0.2"; Organimizer goes next to it (...\PhotoSorter →
 ;   ...\Organimizer, same mode). After the new files are in place setup removes only
 ;   PhotoSorter's own program files, its Start Menu / desktop shortcuts and its Add/Remove
 ;   entry. PhotoSorter.ini, presets, undo logs and photos are never deleted; the app imports
 ;   the old settings on first start and leaves the old file as it is.
+; - 3.0.2 display name: 3.0.0/3.0.1 used the visible name "PrimeCrew Organimizer"
+;   (<PREV_APP_NAME>). Same install folder, same Add/Remove key (<APP_ID>), same settings
+;   path. Setup writes <PUBLISHER>\<APP_NAME>.lnk and deletes leftover
+;   <PUBLISHER>\<PREV_APP_NAME>.lnk (and the same name at the Start Menu root and on the
+;   desktop) so the shortcut and Add/Remove entry are not duplicated.
 ; - Shared PrimeCrew setup look (same on every PrimeCrew installer):
 ;     upgrade: first page and Ready page start with the banner
 ;              "Updating existing installation: <App> v<old> → v<new>", then
@@ -41,6 +46,9 @@ Target amd64-unicode
 !ifndef LEGACY_ID
   !error "Build with scripts/build-release.sh (LEGACY_* values are required)"
 !endif
+!ifndef PREV_APP_NAME
+  !error "Build with scripts/build-release.sh (PREV_APP_NAME is required)"
+!endif
 !define SETTINGS_DIR "%APPDATA%\${PUBLISHER}\${APP_SHORT}"
 
 !include "MUI2.nsh"
@@ -54,7 +62,7 @@ Name "${APP_NAME}"
 OutFile "${OUTFILE}"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-BrandingText "${APP_NAME} ${APP_VERSION} - ${PUBLISHER}"
+BrandingText "${PUBLISHER}"
 ShowInstDetails show
 ShowUninstDetails show
 
@@ -265,6 +273,12 @@ Function ExeIsInUse
     Push 1
     Return
   ${EndIf}
+  ; 3.0.0/3.0.1 window title was ${PREV_APP_NAME}
+  FindWindow $0 "Window Class" "${PREV_APP_NAME}"
+  ${If} $0 != 0
+    Push 1
+    Return
+  ${EndIf}
   ${If} $Legacy == 1
     FindWindow $0 "Window Class" "${LEGACY_NAME}"
     ${If} $0 != 0
@@ -456,13 +470,16 @@ Section "Start Menu shortcut" SecStart
   CreateDirectory "$SMPROGRAMS\${PUBLISHER}"
   Delete "$SMPROGRAMS\${PUBLISHER}\${APP_NAME}.lnk"
   CreateShortcut "$SMPROGRAMS\${PUBLISHER}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
-  ; a root-level shortcut (none so far) would be a duplicate
+  ; leftover visible name from 3.0.0/3.0.1, and a root-level shortcut, would be duplicates
+  Delete "$SMPROGRAMS\${PUBLISHER}\${PREV_APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${PREV_APP_NAME}.lnk"
   Delete "$SMPROGRAMS\${APP_NAME}.lnk"
 SectionEnd
 
 Section /o "Desktop shortcut" SecDesktop
   !insertmacro SetMode
   Delete "$DESKTOP\${APP_NAME}.lnk"
+  Delete "$DESKTOP\${PREV_APP_NAME}.lnk"
   CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
 SectionEnd
 
@@ -478,7 +495,7 @@ Function ReadyPage
     Abort
   ${EndIf}
   ${If} $Legacy == 1
-    ; "PhotoSorter v2.0.5 → PrimeCrew Organimizer v3.0.1" is longer: two lines
+    ; "PhotoSorter v2.0.5 → Organimizer v3.0.2" / previous-name banners: two lines
     CreateFont $BannerFont "$(^Font)" 9 700
     ${NSD_CreateLabel} 0 0 100% 26u "$Banner"
     Pop $1
@@ -593,6 +610,9 @@ Function .onInit
     ${If} ${FileExists} "$DESKTOP\${APP_NAME}.lnk"
       StrCpy $WantDesktop 1
     ${EndIf}
+    ${If} ${FileExists} "$DESKTOP\${PREV_APP_NAME}.lnk"
+      StrCpy $WantDesktop 1
+    ${EndIf}
     ${If} $Legacy == 1
     ${AndIf} ${FileExists} "$DESKTOP\${LEGACY_NAME}.lnk"
       StrCpy $WantDesktop 1
@@ -626,9 +646,12 @@ Section "un.${APP_NAME}" UnSecApp
   SectionIn RO
   !insertmacro SetMode
   Delete "$SMPROGRAMS\${PUBLISHER}\${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${PUBLISHER}\${PREV_APP_NAME}.lnk"
   RMDir "$SMPROGRAMS\${PUBLISHER}" ; only if empty: other PrimeCrew apps keep the folder
   Delete "$SMPROGRAMS\${APP_NAME}.lnk"
+  Delete "$SMPROGRAMS\${PREV_APP_NAME}.lnk"
   Delete "$DESKTOP\${APP_NAME}.lnk"
+  Delete "$DESKTOP\${PREV_APP_NAME}.lnk"
   ; only the files setup installed (never settings, presets, undo logs or your files)
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\README.txt"

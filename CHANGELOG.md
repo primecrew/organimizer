@@ -4,6 +4,25 @@ All versions are Windows 10/11 builds (portable exe; from 2.0.5 also an
 installer). None of them is code-signed, and so far they have been tested on
 Linux and under Wine only, not on a real Windows PC.
 
+## 3.0.2 – visible name Organimizer, About aligned (branch `v3-organimizer`, not released yet)
+- The visible name is now **Organimizer** (capital O, same as the GitHub
+  repo). Window title, header, Help > About, version-info ProductName /
+  FileDescription, installer, Start Menu
+  `PrimeCrew Software\Organimizer.lnk`, Add/Remove Programs "Organimizer",
+  and docs. The publisher stays **PrimeCrew Software**. Install folder and
+  settings path (`%APPDATA%\PrimeCrew Software\Organimizer`) are unchanged.
+- Setup over 3.0.0/3.0.1 shows "Updating existing installation: Organimizer
+  v3.0.1 → v3.0.2", writes the new shortcut, and deletes leftover
+  `PrimeCrew Organimizer.lnk` (in the PrimeCrew Software folder, at the
+  Start Menu root, and on the desktop). The Add/Remove key stays
+  `Uninstall\Organimizer` (DisplayName is updated; no second entry).
+  PhotoSorter 2.x leftover cleanup is unchanged.
+- Help > About matches the other PrimeCrew apps (Tweakinator layout: centred
+  window, 72 px icon, app name, "Version …", "by PrimeCrew Software",
+  short description, copyright, license; Close). TMDB attribution is kept.
+- Installer `Organimizer-v3.0.2-setup.exe` and portable zip
+  `Organimizer-v3.0.2-win64.zip`.
+
 ## 3.0.1 – version bump, lookup and recognition build (branch `v3-organimizer`, not released yet)
 - Version bump of the 3.0.0 build already given for Windows testing: the
   smarter per-file Plex recognition with the Why column, and the TMDB

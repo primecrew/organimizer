@@ -1,8 +1,8 @@
 [package]
 name = "organimizer"
-version = "3.0.1"
+version = "3.0.2"
 edition = "2024"
-description = "PrimeCrew Organimizer: rename and sort files into date folders, and organize movies and TV shows for Plex"
+description = "Organimizer: rename and sort files into date folders, and organize movies and TV shows for Plex"
 license = "GPL-3.0-or-later"
 authors = ["PrimeCrew Software"]
 

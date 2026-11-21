@@ -1,4 +1,4 @@
-//! PrimeCrew Organimizer core library (PhotoSorter before 3.0).
+//! Organimizer core library (PhotoSorter before 3.0).
 //!
 //! The GUI (`main.rs` / `gui.rs`) is a thin shell over this library so that
 //! all of the file-system logic can be unit tested on any platform.

@@ -1,10 +1,11 @@
-# PrimeCrew Organimizer 3.0.1
+# Organimizer 3.0.2
 
 By PrimeCrew Software. Formerly **PhotoSorter** (2.x; the last PhotoSorter
 release is [v2.0.5](https://github.com/primecrew/organimizer/releases/tag/v2.0.5)).
 
-Organimizer is a portable Windows 10/11 desktop app (Rust + eframe/egui, one
-exe) with two tabs:
+Organimizer is a Windows 10/11 desktop app (Rust + eframe/egui). It ships as a
+portable zip (one exe you can run from any folder) and an optional installer,
+with two tabs:
 
 - **Organize** – renames files with an ordered, ReNamer Pro-style rule list
   and then, optionally, moves them into date folders such as `March 2024`
@@ -57,11 +58,12 @@ deleted, and the last run can be undone.
   (no registry). PhotoSorter's `PhotoSorter.ini` is imported on first start
   and never modified.
 
-**Download:** `Organimizer-3.0.1-win64.zip` (portable) or
-`Organimizer-3.0.1-setup.exe` (installer: Start Menu › PrimeCrew Software ›
-PrimeCrew Organimizer, Add/Remove Programs "PrimeCrew Organimizer"; it
-upgrades an installed PhotoSorter 2.x and removes the old program, shortcut
-and Add/Remove entry). Both contain README.txt, HELP.md, LICENSE and
+**Download:** `Organimizer-v3.0.2-win64.zip` (portable) or
+`Organimizer-v3.0.2-setup.exe` (installer: Start Menu › PrimeCrew Software ›
+Organimizer, Add/Remove Programs "Organimizer"; it upgrades an installed
+PhotoSorter 2.x or Organimizer 3.0.0/3.0.1 and removes leftover program
+files, the old "PrimeCrew Organimizer" shortcut and a duplicate Add/Remove
+entry). Both contain README.txt, HELP.md, LICENSE and
 THIRD-PARTY-NOTICES.txt.
 
 **Status:** the exe is not code-signed, so Windows SmartScreen will probably
@@ -69,9 +71,9 @@ warn on first run (More info > Run anyway; compare the SHA-256 published with
 each release). It has been tested on Linux and under Wine only, not yet on a
 real Windows PC.
 
-End-user docs: `dist/v3.0.1/README.txt` and `dist/v3.0.1/HELP.md` (shipped
+End-user docs: `dist/v3.0.2/README.txt` and `dist/v3.0.2/HELP.md` (shipped
 as `README.txt` and `HELP.md`, together with `LICENSE` and
-`dist/v3.0.1/THIRD-PARTY-NOTICES.txt`); older versions under `dist/v2.*`,
+`dist/v3.0.2/THIRD-PARTY-NOTICES.txt`); older versions under `dist/v2.*`,
 v1 docs: `dist/README.txt`. Version history: [CHANGELOG.md](CHANGELOG.md).
 Test notes: `docs/v2/TEST-SUMMARY.md`, `docs/v3/TEST-SUMMARY.md`;
 screenshots: `docs/v3/screenshots/`.
@@ -81,7 +83,7 @@ TMDB.
 
 ## Window layout (top to bottom) and why
 
-0. **Header** – the app icon, "PrimeCrew Organimizer", the version and a
+0. **Header** – the app icon, "Organimizer", the version and a
    one-line description, with the theme toggle and A−/A+ text size on the
    right. **Menu bar** – File (New Project Ctrl+N, Open Folder… Ctrl+O, Undo
    Last Run…, Exit), Presets (Load ▸, Save current as preset…, Manage
@@ -204,13 +206,14 @@ version resource names PrimeCrew Software as the company.
 with `makensis`) follows the shared PrimeCrew installer look (Encode FFS,
 Tweakinator): per-user by default (`%LOCALAPPDATA%\Programs\Organimizer`,
 no admin rights) or for everyone (`Program Files\Organimizer`), Start Menu
-shortcut `PrimeCrew Software\PrimeCrew Organimizer.lnk` (shared brand
-folder), optional desktop shortcut, Add/Remove Programs entry
-"PrimeCrew Organimizer" under `...\Uninstall\Organimizer`, in-place
+shortcut `PrimeCrew Software\Organimizer.lnk` (shared brand
+folder; leftover `PrimeCrew Organimizer.lnk` from 3.0.0/3.0.1 is removed),
+optional desktop shortcut, Add/Remove Programs entry
+"Organimizer" under `...\Uninstall\Organimizer`, in-place
 upgrade with the "Updating existing installation: … v<old> → v<new>"
 banner. An installed PhotoSorter 2.x (`...\Uninstall\PhotoSorter`) is
-detected as an upgrade ("PhotoSorter v2.0.5 → PrimeCrew Organimizer
-v3.0.1"); after installing, setup removes the old PhotoSorter program
+detected as an upgrade ("PhotoSorter v2.0.5 → Organimizer
+v3.0.2"); after installing, setup removes the old PhotoSorter program
 files, shortcuts and uninstall entry (never settings, undo logs or user
 files). It writes `Organimizer.installed` next to the exe;
 `settings::choose_ini_path` then uses
@@ -221,7 +224,7 @@ THIRD-PARTY-NOTICES.txt from `cargo metadata`.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4, 2.0.5, 3.0.0, 3.0.1.
+See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4, 2.0.5, 3.0.0, 3.0.1, 3.0.2.
 
 ## License
 

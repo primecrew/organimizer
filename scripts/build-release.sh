@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Windows release of PrimeCrew Organimizer: Organimizer.exe (x86_64-pc-windows-gnu,
+# Windows release of Organimizer: Organimizer.exe (x86_64-pc-windows-gnu,
 # static CRT, build-machine paths remapped), the portable zip and the NSIS
 # installer. Needs mingw-w64, makensis (NSIS 3) and python3.
 # Usage: scripts/build-release.sh            (outputs into dist/)
@@ -12,7 +12,8 @@ SYSROOT="$(rustc --print sysroot)"
 TARGET=x86_64-pc-windows-gnu
 
 # ---- identity (keep in sync with src/about.rs and src/settings.rs)
-APP_NAME="PrimeCrew Organimizer"     # shown name: window title, shortcut, Add/Remove Programs
+APP_NAME="Organimizer"               # shown name: window title, shortcut, Add/Remove Programs
+PREV_APP_NAME="PrimeCrew Organimizer"  # 3.0.0/3.0.1 visible name (leftover Start Menu / desktop shortcuts)
 APP_SHORT="Organimizer"              # file names, %APPDATA%\<PUBLISHER>\<APP_SHORT>
 APP_ID="Organimizer"                 # Add/Remove Programs key
 APP_DIRNAME="Organimizer"            # install folder name (like Encode FFS: no brand level)
@@ -33,6 +34,7 @@ DOC_DIR="dist/v$VERSION"
 grep -q "pub const PUBLISHER: &str = \"$PUBLISHER\"" src/about.rs || { echo "PUBLISHER differs from src/about.rs" >&2; exit 1; }
 grep -q "pub const INSTALLED_MARKER: &str = \"$MARKER\"" src/settings.rs || { echo "MARKER differs from src/settings.rs" >&2; exit 1; }
 grep -q "pub const PRODUCT: &str = \"$APP_NAME\"" src/about.rs || { echo "APP_NAME differs from src/about.rs" >&2; exit 1; }
+grep -q "pub const PREV_PRODUCT: &str = \"$PREV_APP_NAME\"" src/about.rs || { echo "PREV_APP_NAME differs from src/about.rs" >&2; exit 1; }
 grep -q "pub const INI_NAME: &str = \"$INI_NAME\"" src/settings.rs || { echo "INI_NAME differs from src/settings.rs" >&2; exit 1; }
 for f in README.txt HELP.md; do [ -f "$DOC_DIR/$f" ] || { echo "missing $DOC_DIR/$f" >&2; exit 1; }; done
 
@@ -69,7 +71,7 @@ PY
 cp "$EXE" "$DOC_DIR/$APP_EXE"
 
 # ---- portable zip (settings are created next to the exe on first start)
-ZIP="dist/$APP_SHORT-$VERSION-win64.zip"
+ZIP="dist/$APP_SHORT-v$VERSION-win64.zip"
 rm -f "$ZIP"
 python3 - "$ZIP" "$EXE" "$DOC_DIR" <<'PY'
 import sys, zipfile
@@ -83,16 +85,17 @@ PY
 
 # ---- installer
 command -v makensis >/dev/null || { echo "makensis not found (apt install nsis)" >&2; exit 1; }
-SETUP="dist/$APP_SHORT-$VERSION-setup.exe"
+SETUP="dist/$APP_SHORT-v$VERSION-setup.exe"
 makensis -V2 -INPUTCHARSET UTF8 \
   -DAPP_NAME="$APP_NAME" -DAPP_SHORT="$APP_SHORT" -DINI_NAME="$INI_NAME" \
   -DLEGACY_NAME="$LEGACY_NAME" -DLEGACY_ID="$LEGACY_ID" -DLEGACY_DIRNAME="$LEGACY_DIRNAME" \
   -DLEGACY_EXE="$LEGACY_EXE" -DLEGACY_MARKER="$LEGACY_MARKER" -DLEGACY_INI="$LEGACY_INI" \
   -DAPP_ID="$APP_ID" -DAPP_DIRNAME="$APP_DIRNAME" -DAPP_EXE="$APP_EXE" \
   -DAPP_VERSION="$VERSION" -DVERSION4="$VERSION4" -DPUBLISHER="$PUBLISHER" -DMARKER="$MARKER" \
+  -DPREV_APP_NAME="$PREV_APP_NAME" \
   -DICON="$SRC/assets/icon.ico" -DEXE_PATH="$SRC/$EXE" -DSRC_DIR="$SRC" -DDOC_DIR="$SRC/$DOC_DIR" \
   -DOUTFILE="$SRC/$SETUP" installer/installer.nsi
 
-( cd dist && sha256sum "$(basename "$ZIP")" "$(basename "$SETUP")" > "$APP_SHORT-$VERSION-SHA256SUMS.txt" \
-  && sha256sum "v$VERSION/$APP_EXE" >> "$APP_SHORT-$VERSION-SHA256SUMS.txt" )
-cat "dist/$APP_SHORT-$VERSION-SHA256SUMS.txt"
+( cd dist && sha256sum "$(basename "$ZIP")" "$(basename "$SETUP")" > "$APP_SHORT-v$VERSION-SHA256SUMS.txt" \
+  && sha256sum "v$VERSION/$APP_EXE" >> "$APP_SHORT-v$VERSION-SHA256SUMS.txt" )
+cat "dist/$APP_SHORT-v$VERSION-SHA256SUMS.txt"

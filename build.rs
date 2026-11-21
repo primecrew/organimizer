@@ -8,9 +8,9 @@ fn main() {
             // keep in sync with src/about.rs (checked by a unit test);
             // FileVersion / ProductVersion come from Cargo.toml
             .set("CompanyName", "PrimeCrew Software")
-            .set("ProductName", "PrimeCrew Organimizer")
+            .set("ProductName", "Organimizer")
             // FileDescription is what Task Manager shows, so keep it short
-            .set("FileDescription", "PrimeCrew Organimizer")
+            .set("FileDescription", "Organimizer")
             .set("Comments", "Rename and sort files into date folders, and organize movies and TV shows for Plex")
             .set("InternalName", "Organimizer")
             .set("OriginalFilename", "Organimizer.exe")
