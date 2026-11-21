@@ -205,6 +205,7 @@ struct OptionsDraft {
     tmdb_enabled: bool,
     tmdb_key: String,
     tmdb_language: String,
+    tmdb_id_tag: bool,
     show_key: bool,
 }
 
@@ -1666,6 +1667,7 @@ impl App {
             tmdb_enabled: self.s.plex.tmdb_enabled,
             tmdb_key: self.s.plex.tmdb_key.clone(),
             tmdb_language: self.s.plex.tmdb_language.clone(),
+            tmdb_id_tag: self.s.plex.tmdb_id_tag,
             show_key: false,
         });
     }
@@ -3239,6 +3241,7 @@ impl App {
             tmdb_enabled: self.s.plex.tmdb_enabled,
             tmdb_key: self.s.plex.tmdb_key.clone(),
             tmdb_language: self.s.plex.tmdb_language.clone(),
+            tmdb_id_tag: self.s.plex.tmdb_id_tag,
             show_key: draft.show_key,
         };
         let mut open_help = false;
@@ -3369,6 +3372,8 @@ impl App {
                         ui.add(egui::TextEdit::singleline(&mut draft.tmdb_language).desired_width(fs * 5.0).hint_text("en-US"))
                             .on_hover_text("Language of the titles, e.g. en-US, de-DE, fr-FR");
                     });
+                    ui.checkbox(&mut draft.tmdb_id_tag, "Add {tmdb-ID} to the folder name of titles confirmed on TMDB")
+                        .on_hover_text("e.g. “Alien (1979) {tmdb-348}”: Plex then uses exactly that title instead of guessing");
                     ui.horizontal_wrapped(|ui| {
                         ui.label(RichText::new("No key yet? It is free:").small());
                         if ui
@@ -3458,6 +3463,7 @@ impl App {
             self.s.custom_extensions = draft.custom_extensions.trim().to_string();
             self.s.plex.tmdb_enabled = draft.tmdb_enabled;
             self.s.plex.tmdb_key = draft.tmdb_key.trim().to_string();
+            self.s.plex.tmdb_id_tag = draft.tmdb_id_tag;
             self.s.plex.tmdb_language = if draft.tmdb_language.trim().is_empty() {
                 settings::DEFAULT_TMDB_LANGUAGE.to_string()
             } else {

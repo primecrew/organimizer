@@ -83,7 +83,7 @@ impl ExtraKind {
             ExtraKind::Other => "Other",
         }
     }
-    fn singular(self) -> &'static str {
+    pub fn singular(self) -> &'static str {
         match self {
             ExtraKind::BehindTheScenes => "Behind the Scenes",
             ExtraKind::DeletedScenes => "Deleted Scene",
@@ -170,7 +170,7 @@ impl Analysis {
         }
     }
 
-    fn because(&mut self, reason: impl Into<String>) {
+    pub fn because(&mut self, reason: impl Into<String>) {
         let r = reason.into();
         if !r.is_empty() && !self.why.contains(&r) {
             self.why.push(r);
@@ -888,7 +888,7 @@ pub fn safe_component(s: &str) -> String {
     if RESERVED.contains(&s.to_lowercase().as_str()) { format!("{s}_") } else { s }
 }
 
-fn name_with_year(title: &str, year: Option<u16>) -> String {
+pub fn name_with_year(title: &str, year: Option<u16>) -> String {
     let t = title.trim();
     match year {
         Some(y) => format!("{t} ({y})"),
@@ -932,7 +932,11 @@ pub fn relative_path(a: &Analysis, ext: &str) -> Option<PathBuf> {
     }
     let ext = ext.to_lowercase();
     let top = safe_component(&name_with_year(&a.title, a.year));
-    let mut p = PathBuf::from(&top);
+    // Plex reads "{tmdb-123}" in the folder name and skips its own guess
+    let mut p = PathBuf::from(match a.tmdb_id {
+        Some(id) => format!("{top} {{tmdb-{id}}}"),
+        None => top.clone(),
+    });
     match a.kind {
         Kind::Movie => {
             let mut name = top.clone();

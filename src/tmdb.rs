@@ -17,6 +17,30 @@ pub const WEBSITE: &str = "https://www.themoviedb.org";
 pub const API_SETTINGS_URL: &str = "https://www.themoviedb.org/settings/api";
 pub const SIGNUP_URL: &str = "https://www.themoviedb.org/signup";
 const API: &str = "https://api.themoviedb.org/3";
+const IMAGES: &str = "https://image.tmdb.org/t/p";
+
+/// API base URL. A debug override (environment variable, only for the
+/// automated UI test with a local mock server) is accepted for
+/// `http://127.0.0.1` / `http://localhost` addresses only.
+pub fn api_base() -> String {
+    debug_override("ORGANIMIZER_TMDB_API").unwrap_or_else(|| API.to_string())
+}
+
+/// Poster image base URL (same local-only debug override).
+pub fn image_base() -> String {
+    debug_override("ORGANIMIZER_TMDB_IMAGES").unwrap_or_else(|| IMAGES.to_string())
+}
+
+fn debug_override(var: &str) -> Option<String> {
+    let v = std::env::var(var).ok()?;
+    let v = v.trim().trim_end_matches('/').to_string();
+    (v.starts_with("http://127.0.0.1:") || v.starts_with("http://localhost:")).then_some(v)
+}
+
+/// Poster thumbnail URL (`w92` / `w154`).
+pub fn poster_url(path: &str, width: u32) -> String {
+    format!("{}/w{width}{}", image_base(), if path.starts_with('/') { path.to_string() } else { format!("/{path}") })
+}
 
 /// How the key is sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +94,8 @@ pub struct Match {
     pub year: Option<u16>,
     pub original_title: String,
     pub overview: String,
+    /// `/abc.jpg` (relative to the image base), if TMDB has a poster.
+    pub poster_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -95,6 +121,8 @@ struct RawResult {
     first_air_date: Option<String>,
     #[serde(default)]
     overview: Option<String>,
+    #[serde(default)]
+    poster_path: Option<String>,
 }
 
 fn year_of(date: &Option<String>) -> Option<u16> {
@@ -115,6 +143,7 @@ pub fn parse_search(json: &str, limit: usize) -> Result<Vec<Match>, String> {
                 year: year_of(&r.release_date).or(year_of(&r.first_air_date)),
                 original_title: r.original_title.or(r.original_name).unwrap_or_else(|| title.clone()),
                 overview: r.overview.unwrap_or_default().chars().take(300).collect(),
+                poster_path: r.poster_path.filter(|p| !p.trim().is_empty()),
                 title,
             }
         })
@@ -131,6 +160,150 @@ pub fn parse_episode_name(json: &str) -> Result<Option<String>, String> {
     }
     let ep: Ep = serde_json::from_str(json).map_err(|e| format!("Unexpected answer from TMDB: {e}"))?;
     Ok(ep.name.map(|n| n.trim().to_string()).filter(|n| !n.is_empty()))
+}
+
+/// A TMDB video entry (trailer, featurette, ...): used as a name hint for
+/// the user's extras only.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Video {
+    pub name: String,
+    /// TMDB type: Trailer, Teaser, Featurette, Behind the Scenes, Clip, Bloopers ...
+    pub kind: String,
+}
+
+/// `/movie/{id}?append_to_response=videos`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MovieDetails {
+    pub id: u64,
+    pub title: String,
+    pub year: Option<u16>,
+    /// minutes
+    pub runtime: Option<u32>,
+    pub videos: Vec<Video>,
+}
+
+/// `/tv/{id}`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TvDetails {
+    pub id: u64,
+    pub name: String,
+    pub year: Option<u16>,
+    /// (season number, episode count)
+    pub seasons: Vec<(u32, u32)>,
+}
+
+/// One episode of `/tv/{id}/season/{n}`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Episode {
+    pub season: u32,
+    pub episode: u32,
+    pub name: String,
+    /// minutes
+    pub runtime: Option<u32>,
+}
+
+fn bad(e: serde_json::Error) -> String {
+    format!("Unexpected answer from TMDB: {e}")
+}
+
+pub fn parse_movie_details(json: &str) -> Result<MovieDetails, String> {
+    #[derive(Deserialize)]
+    struct V {
+        #[serde(default)]
+        name: String,
+        #[serde(default, rename = "type")]
+        kind: String,
+        #[serde(default)]
+        site: String,
+    }
+    #[derive(Deserialize, Default)]
+    struct Vs {
+        #[serde(default)]
+        results: Vec<V>,
+    }
+    #[derive(Deserialize)]
+    struct M {
+        id: u64,
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        release_date: Option<String>,
+        #[serde(default)]
+        runtime: Option<u32>,
+        #[serde(default)]
+        videos: Option<Vs>,
+    }
+    let m: M = serde_json::from_str(json).map_err(bad)?;
+    let mut videos: Vec<Video> = m
+        .videos
+        .unwrap_or_default()
+        .results
+        .into_iter()
+        .filter(|v| !v.name.trim().is_empty() && (v.site.is_empty() || v.site == "YouTube" || v.site == "Vimeo"))
+        .map(|v| Video { name: v.name.trim().to_string(), kind: v.kind })
+        .collect();
+    videos.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
+    Ok(MovieDetails { id: m.id, title: m.title, year: year_of(&m.release_date), runtime: m.runtime.filter(|r| *r > 0), videos })
+}
+
+pub fn parse_tv_details(json: &str) -> Result<TvDetails, String> {
+    #[derive(Deserialize)]
+    struct S {
+        season_number: u32,
+        #[serde(default)]
+        episode_count: u32,
+    }
+    #[derive(Deserialize)]
+    struct T {
+        id: u64,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        first_air_date: Option<String>,
+        #[serde(default)]
+        seasons: Vec<S>,
+    }
+    let t: T = serde_json::from_str(json).map_err(bad)?;
+    Ok(TvDetails {
+        id: t.id,
+        name: t.name,
+        year: year_of(&t.first_air_date),
+        seasons: t.seasons.into_iter().map(|s| (s.season_number, s.episode_count)).collect(),
+    })
+}
+
+pub fn parse_season(json: &str) -> Result<Vec<Episode>, String> {
+    #[derive(Deserialize)]
+    struct E {
+        #[serde(default)]
+        season_number: u32,
+        episode_number: u32,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        runtime: Option<u32>,
+    }
+    #[derive(Deserialize)]
+    struct S {
+        #[serde(default)]
+        season_number: Option<u32>,
+        #[serde(default)]
+        episodes: Vec<E>,
+    }
+    let s: S = serde_json::from_str(json).map_err(bad)?;
+    let sn = s.season_number;
+    let mut eps: Vec<Episode> = s
+        .episodes
+        .into_iter()
+        .map(|e| Episode {
+            season: sn.unwrap_or(e.season_number),
+            episode: e.episode_number,
+            name: e.name.trim().to_string(),
+            runtime: e.runtime.filter(|r| *r > 0),
+        })
+        .collect();
+    eps.sort_by_key(|e| e.episode);
+    Ok(eps)
 }
 
 /// TMDB error JSON (`{"status_message": ...}`) or the HTTP status as text.
@@ -168,7 +341,7 @@ pub fn url(path: &str, params: &[(&str, String)], auth: &Auth) -> String {
     if let Auth::ApiKey(k) = auth {
         q.push(format!("api_key={}", encode(k)));
     }
-    format!("{API}{path}?{}", q.join("&"))
+    format!("{}{path}?{}", api_base(), q.join("&"))
 }
 
 /// What to search for.
@@ -200,21 +373,88 @@ mod net {
     use super::*;
     use std::time::Duration;
 
-    fn get(url: &str, auth: &Auth) -> Result<String, String> {
-        let agent = ureq::AgentBuilder::new()
+    use std::sync::Mutex;
+    use std::time::Instant;
+
+    /// At most ~8 requests a second from this app (TMDB allows more), and
+    /// one polite retry after a 429.
+    const MIN_GAP: Duration = Duration::from_millis(125);
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+
+    fn pace() {
+        let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(t) = *last {
+            let since = t.elapsed();
+            if since < MIN_GAP {
+                std::thread::sleep(MIN_GAP - since);
+            }
+        }
+        *last = Some(Instant::now());
+    }
+
+    fn agent() -> ureq::Agent {
+        ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(8))
             .timeout(Duration::from_secs(15))
             .user_agent(concat!("PrimeCrewOrganimizer/", env!("CARGO_PKG_VERSION")))
-            .build();
-        let mut req = agent.get(url).set("Accept", "application/json");
-        if let Auth::Bearer(t) = auth {
-            req = req.set("Authorization", &format!("Bearer {t}"));
+            .build()
+    }
+
+    fn call(url: &str, auth: Option<&Auth>, accept: &str) -> Result<ureq::Response, String> {
+        for attempt in 0..2 {
+            pace();
+            let mut req = agent().get(url).set("Accept", accept);
+            if let Some(Auth::Bearer(t)) = auth {
+                req = req.set("Authorization", &format!("Bearer {t}"));
+            }
+            match req.call() {
+                Ok(r) => return Ok(r),
+                Err(ureq::Error::Status(429, r)) if attempt == 0 => {
+                    let wait = r.header("Retry-After").and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(1).min(5);
+                    std::thread::sleep(Duration::from_secs(wait));
+                }
+                Err(ureq::Error::Status(code, r)) => {
+                    return Err(error_text(code, &r.into_string().unwrap_or_default()));
+                }
+                Err(ureq::Error::Transport(t)) => {
+                    return Err(format!("Could not reach TMDB (offline?): {}", t.kind()));
+                }
+            }
         }
-        match req.call() {
-            Ok(r) => r.into_string().map_err(|e| format!("Could not read the TMDB answer: {e}")),
-            Err(ureq::Error::Status(code, r)) => Err(error_text(code, &r.into_string().unwrap_or_default())),
-            Err(ureq::Error::Transport(t)) => Err(format!("Could not reach TMDB (offline?): {t}")),
-        }
+        Err(error_text(429, ""))
+    }
+
+    fn get(url: &str, auth: &Auth) -> Result<String, String> {
+        call(url, Some(auth), "application/json")?
+            .into_string()
+            .map_err(|e| format!("Could not read the TMDB answer: {e}"))
+    }
+
+    fn lang(language: &str) -> Vec<(&'static str, String)> {
+        if language.trim().is_empty() { vec![] } else { vec![("language", language.trim().to_string())] }
+    }
+
+    pub fn movie_details(id: u64, language: &str, auth: &Auth) -> Result<MovieDetails, String> {
+        let mut p = lang(language);
+        p.push(("append_to_response", "videos".into()));
+        parse_movie_details(&get(&url(&format!("/movie/{id}"), &p, auth), auth)?)
+    }
+
+    pub fn tv_details(id: u64, language: &str, auth: &Auth) -> Result<TvDetails, String> {
+        parse_tv_details(&get(&url(&format!("/tv/{id}"), &lang(language), auth), auth)?)
+    }
+
+    pub fn season(id: u64, season: u32, language: &str, auth: &Auth) -> Result<Vec<Episode>, String> {
+        parse_season(&get(&url(&format!("/tv/{id}/season/{season}"), &lang(language), auth), auth)?)
+    }
+
+    /// Poster bytes (JPEG), at most 2 MB. Images need no key.
+    pub fn image(path: &str, width: u32) -> Result<Vec<u8>, String> {
+        use std::io::Read;
+        let r = call(&poster_url(path, width), None, "image/*")?;
+        let mut buf = vec![];
+        r.into_reader().take(2 << 20).read_to_end(&mut buf).map_err(|e| format!("Could not read the poster: {e}"))?;
+        Ok(buf)
     }
 
     pub fn search(
@@ -248,7 +488,7 @@ mod net {
 }
 
 #[cfg(feature = "net")]
-pub use net::{episode_name, search};
+pub use net::{episode_name, image, movie_details, search, season, tv_details};
 
 #[cfg(test)]
 mod tests {
@@ -271,6 +511,13 @@ mod tests {
         assert_eq!(Auth::from_key("12345"), None);
         assert_eq!(masked(v3), "0123…DEF");
         assert!(!masked(&t).contains("eyJ0ZXN0"));
+    }
+
+    #[test]
+    fn poster_urls_and_local_only_override() {
+        assert_eq!(poster_url("/a.jpg", 92), format!("{}/w92/a.jpg", image_base()));
+        // the debug override only ever points at this PC
+        assert!(debug_override("ORGANIMIZER_TMDB_TEST_UNSET_VAR").is_none());
     }
 
     #[test]

@@ -1,0 +1,42 @@
+{
+ "id": 348,
+ "title": "Alien",
+ "original_title": "Alien",
+ "release_date": "1979-05-25",
+ "runtime": 117,
+ "poster_path": "/alien-poster.jpg",
+ "videos": {
+  "results": [
+   {
+    "name": "Alien Official Trailer",
+    "type": "Trailer",
+    "site": "YouTube",
+    "key": "x1"
+   },
+   {
+    "name": "The Beast Within: The Making of Alien",
+    "type": "Behind the Scenes",
+    "site": "YouTube",
+    "key": "x2"
+   },
+   {
+    "name": "The Beast Within",
+    "type": "Featurette",
+    "site": "YouTube",
+    "key": "x3"
+   },
+   {
+    "name": "Chestburster scene",
+    "type": "Clip",
+    "site": "YouTube",
+    "key": "x4"
+   },
+   {
+    "name": "Recap",
+    "type": "Recap",
+    "site": "SomethingElse",
+    "key": "x5"
+   }
+  ]
+ }
+}

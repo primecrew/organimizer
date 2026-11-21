@@ -32,6 +32,7 @@ pub mod blacklist;
 pub mod date_source;
 pub mod desktop;
 pub mod duration;
+pub mod lookup;
 pub mod favorites;
 pub mod filetypes;
 pub mod filename_date;

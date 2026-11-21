@@ -1,0 +1,24 @@
+{
+ "id": 63639,
+ "name": "The Expanse",
+ "first_air_date": "2015-12-14",
+ "seasons": [
+  {
+   "season_number": 0,
+   "episode_count": 2,
+   "name": "Specials"
+  },
+  {
+   "season_number": 1,
+   "episode_count": 10
+  },
+  {
+   "season_number": 2,
+   "episode_count": 13
+  },
+  {
+   "season_number": 3,
+   "episode_count": 13
+  }
+ ]
+}

@@ -1,0 +1,32 @@
+{
+ "page": 1,
+ "total_pages": 1,
+ "total_results": 3,
+ "results": [
+  {
+   "id": 348,
+   "title": "Alien",
+   "original_title": "Alien",
+   "release_date": "1979-05-25",
+   "overview": "During its return to the earth, commercial spaceship Nostromo intercepts a distress signal from a distant planet.",
+   "poster_path": "/alien-poster.jpg",
+   "adult": false
+  },
+  {
+   "id": 679,
+   "title": "Aliens",
+   "original_title": "Aliens",
+   "release_date": "1986-07-18",
+   "overview": "Ripley returns to the moon where her crew found the alien.",
+   "poster_path": null
+  },
+  {
+   "id": 8077,
+   "title": "Alien 3",
+   "original_title": "Alien\u00b3",
+   "release_date": "1992-05-22",
+   "overview": "After escaping with Newt and Hicks, Ripley crash-lands on a prison planet.",
+   "poster_path": "/alien3-poster.jpg"
+  }
+ ]
+}

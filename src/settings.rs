@@ -54,6 +54,8 @@ pub struct PlexSettings {
     /// The user's TMDB key or read access token. Stored only in this file.
     pub tmdb_key: String,
     pub tmdb_language: String,
+    /// Add "{tmdb-ID}" to the folder name of titles confirmed on TMDB.
+    pub tmdb_id_tag: bool,
 }
 
 impl Default for PlexSettings {
@@ -67,6 +69,7 @@ impl Default for PlexSettings {
             tmdb_enabled: false,
             tmdb_key: String::new(),
             tmdb_language: DEFAULT_TMDB_LANGUAGE.into(),
+            tmdb_id_tag: true,
         }
     }
 }
@@ -483,6 +486,9 @@ impl Settings {
         if let Some(v) = pget("tmdb_key") {
             p.tmdb_key = v.trim().to_string();
         }
+        if let Some(v) = pget("tmdb_id_folder_tag").and_then(parse_bool) {
+            p.tmdb_id_tag = v;
+        }
         if let Some(v) = pget("tmdb_language").filter(|v| !v.trim().is_empty() && v.len() <= 10) {
             p.tmdb_language = v.trim().to_string();
         }
@@ -884,6 +890,9 @@ tmdb_enabled = {tmdb_enabled}
 tmdb_key = {tmdb_key}
 ; Language for TMDB titles, e.g. en-US, de-DE. Default: en-US
 tmdb_language = {tmdb_language}
+; Add {{tmdb-ID}} to the folder of titles confirmed on TMDB (Plex then
+; skips its own guess). Default: true
+tmdb_id_folder_tag = {tmdb_id_tag}
 
 ; ---------------------------------------------------------------------------
 ; Presets: [Preset:Name] sections, saved from the app. Each holds a whole
@@ -945,6 +954,7 @@ tmdb_language = {tmdb_language}
             tmdb_enabled = self.plex.tmdb_enabled,
             tmdb_key = one(self.plex.tmdb_key.trim()),
             tmdb_language = one(&self.plex.tmdb_language),
+            tmdb_id_tag = self.plex.tmdb_id_tag,
         )
         .replace('\n', "\r\n") // Notepad-friendly line endings
     }
@@ -1730,6 +1740,7 @@ mod tests {
             tmdb_enabled: true,
             tmdb_key: "0123456789abcdef0123456789abcdef".into(),
             tmdb_language: "de-DE".into(),
+            tmdb_id_tag: false,
         };
         s.mode = "plex".into();
         let text = s.to_ini();

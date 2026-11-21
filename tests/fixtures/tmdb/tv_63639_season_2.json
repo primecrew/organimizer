@@ -1,0 +1,85 @@
+{
+ "id": 71001,
+ "season_number": 2,
+ "name": "Season 2",
+ "episodes": [
+  {
+   "episode_number": 1,
+   "season_number": 2,
+   "name": "Safe",
+   "runtime": 45
+  },
+  {
+   "episode_number": 2,
+   "season_number": 2,
+   "name": "Doors & Corners",
+   "runtime": 43
+  },
+  {
+   "episode_number": 3,
+   "season_number": 2,
+   "name": "Static",
+   "runtime": 44
+  },
+  {
+   "episode_number": 4,
+   "season_number": 2,
+   "name": "Godspeed",
+   "runtime": 42
+  },
+  {
+   "episode_number": 5,
+   "season_number": 2,
+   "name": "Home",
+   "runtime": 44
+  },
+  {
+   "episode_number": 6,
+   "season_number": 2,
+   "name": "Paradigm Shift",
+   "runtime": 43
+  },
+  {
+   "episode_number": 7,
+   "season_number": 2,
+   "name": "The Seventh Man",
+   "runtime": 45
+  },
+  {
+   "episode_number": 8,
+   "season_number": 2,
+   "name": "Pyre",
+   "runtime": 44
+  },
+  {
+   "episode_number": 9,
+   "season_number": 2,
+   "name": "The Weeping Somnambulist",
+   "runtime": 43
+  },
+  {
+   "episode_number": 10,
+   "season_number": 2,
+   "name": "Cascade",
+   "runtime": 44
+  },
+  {
+   "episode_number": 11,
+   "season_number": 2,
+   "name": "Here There Be Dragons",
+   "runtime": 45
+  },
+  {
+   "episode_number": 12,
+   "season_number": 2,
+   "name": "The Monster and the Rocket",
+   "runtime": 44
+  },
+  {
+   "episode_number": 13,
+   "season_number": 2,
+   "name": "Caliban's War",
+   "runtime": 46
+  }
+ ]
+}
