@@ -10,12 +10,13 @@ licenses ("A OR B") Organimizer uses them under the first permissive
 option shown in its notice below. The fonts built into the program are
 listed in section 3; the optional TMDB lookup and logo in section 6.
 
-1. CRATES (172)
+1. CRATES (184)
 ------------------------------------------------------------------------
   accesskit                    0.25.2       MIT OR Apache-2.0
   adler2                       2.0.1        0BSD OR MIT OR Apache-2.0
   ahash                        0.8.12       MIT OR Apache-2.0
   aho-corasick                 1.1.5        Unlicense OR MIT
+  arboard                      3.7.0        MIT OR Apache-2.0
   arrayvec                     0.7.8        MIT OR Apache-2.0
   autocfg                      1.5.1        Apache-2.0 OR MIT
   base64                       0.22.1       MIT OR Apache-2.0
@@ -27,6 +28,7 @@ listed in section 3; the optional TMDB lookup and logo in section 6.
   cfg-if                       1.0.5        MIT OR Apache-2.0
   cfg_aliases                  0.2.2        MIT
   chrono                       0.4.45       MIT OR Apache-2.0
+  clipboard-win                5.4.3        BSL-1.0
   color                        0.3.3        Apache-2.0 OR MIT
   crc32fast                    1.5.3        MIT OR Apache-2.0
   cursor-icon                  1.2.0        MIT OR Apache-2.0 OR Zlib
@@ -46,7 +48,9 @@ listed in section 3; the optional TMDB lookup and logo in section 6.
   epaint                       0.37.0       MIT OR Apache-2.0
   epaint_default_fonts         0.37.0       (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0
   equivalent                   1.0.3        Apache-2.0 OR MIT
+  error-code                   3.4.0        BSL-1.0
   euclid                       0.22.14      MIT OR Apache-2.0
+  fax                          0.2.7        MIT
   fdeflate                     0.3.7        MIT OR Apache-2.0
   fearless_simd                0.4.1        Apache-2.0 OR MIT
   find-msvc-tools              0.1.15       MIT OR Apache-2.0
@@ -64,6 +68,7 @@ listed in section 3; the optional TMDB lookup and logo in section 6.
   glutin_egl_sys               0.7.1        Apache-2.0
   glutin_wgl_sys               0.6.1        Apache-2.0
   guillotiere                  0.7.0        MIT/Apache-2.0
+  half                         2.7.1        MIT OR Apache-2.0
   harfrust                     0.12.0       MIT
   hashbrown                    0.17.1       MIT OR Apache-2.0
   icu_collections              2.4.0        Unicode-3.0
@@ -108,6 +113,7 @@ listed in section 3; the optional TMDB lookup and logo in section 6.
   proc-macro2                  1.0.107      MIT OR Apache-2.0
   profiling                    1.0.18       MIT OR Apache-2.0
   pxfm                         0.1.30       BSD-3-Clause OR Apache-2.0
+  quick-error                  2.0.1        MIT/Apache-2.0
   quote                        1.0.47       MIT OR Apache-2.0
   raw-window-handle            0.6.2        MIT OR Apache-2.0 OR Zlib
   read-fonts                   0.41.0       MIT OR Apache-2.0
@@ -134,10 +140,12 @@ listed in section 3; the optional TMDB lookup and logo in section 6.
   stable_deref_trait           1.2.1        MIT OR Apache-2.0
   static_assertions            1.1.0        MIT OR Apache-2.0
   subtle                       2.6.1        BSD-3-Clause
+  syn                          2.0.119      MIT OR Apache-2.0
   syn                          3.0.9        MIT OR Apache-2.0
   synstructure                 0.14.0       MIT
   thiserror                    2.0.21       MIT OR Apache-2.0
   thiserror-impl               2.0.21       MIT OR Apache-2.0
+  tiff                         0.11.3       MIT
   tinystr                      0.8.5        Unicode-3.0
   tinyvec                      1.13.3       Zlib OR Apache-2.0 OR MIT
   toml                         1.1.8+spec-1.1.0 MIT OR Apache-2.0
@@ -163,6 +171,7 @@ listed in section 3; the optional TMDB lookup and logo in section 6.
   web-time                     1.1.0        MIT OR Apache-2.0
   webpki-roots                 0.26.11      CDLA-Permissive-2.0
   webpki-roots                 1.0.12       CDLA-Permissive-2.0
+  weezl                        0.1.12       MIT OR Apache-2.0
   windows-link                 0.2.1        MIT OR Apache-2.0
   windows-sys                  0.52.0       MIT OR Apache-2.0
   windows-sys                  0.61.2       MIT OR Apache-2.0
@@ -176,6 +185,7 @@ listed in section 3; the optional TMDB lookup and logo in section 6.
   yoke                         0.8.4        Unicode-3.0
   yoke-derive                  0.8.4        Unicode-3.0
   zerocopy                     0.8.63       BSD-2-Clause OR Apache-2.0 OR MIT
+  zerocopy-derive              0.8.63       BSD-2-Clause OR Apache-2.0 OR MIT
   zerofrom                     0.1.8        Unicode-3.0
   zerofrom-derive              0.1.8        Unicode-3.0
   zeroize                      1.9.2        Apache-2.0 OR MIT
@@ -184,6 +194,8 @@ listed in section 3; the optional TMDB lookup and logo in section 6.
   zerovec-derive               0.11.7       Unicode-3.0
   zlib-rs                      0.6.8        Zlib
   zmij                         1.0.23       MIT
+  zune-core                    0.5.3        MIT OR Apache-2.0 OR Zlib
+  zune-jpeg                    0.5.15       MIT OR Apache-2.0 OR Zlib
 
 2. CRATE LICENSE AND COPYRIGHT NOTICES
 ------------------------------------------------------------------------
@@ -274,6 +286,31 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+=== arboard 3.7.0 (MIT OR Apache-2.0)
+    https://github.com/1Password/arboard
+--- LICENSE-MIT.txt
+MIT License
+
+Copyright (c) 2022 The Arboard contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 === arrayvec 0.7.8 (MIT OR Apache-2.0)
     https://github.com/bluss/arrayvec
@@ -779,6 +816,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ~~~~
 
+=== clipboard-win 5.4.3 (BSL-1.0)
+    https://github.com/DoumanAsh/clipboard-win
+    Copyright (c) Douman <douman@gmx.se>
+
 === color 0.3.3 (Apache-2.0 OR MIT)
     https://github.com/linebender/color
 --- LICENSE-MIT
@@ -1281,6 +1322,33 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
+=== error-code 3.4.0 (BSL-1.0)
+    https://github.com/DoumanAsh/error-code
+--- LICENSE
+Boost Software License - Version 1.0 - August 17th, 2003
+
+Permission is hereby granted, free of charge, to any person or organization
+obtaining a copy of the software and accompanying documentation covered by
+this license (the "Software") to use, reproduce, display, distribute,
+execute, and transmit the Software, and to prepare derivative works of the
+Software, and to permit third-parties to whom the Software is furnished to
+do so, all subject to the following:
+
+The copyright notices in the Software and this entire statement, including
+the above license grant, this restriction and the following disclaimer,
+must be included in all copies of the Software, in whole or in part, and
+all derivative works of the Software, unless such copies or derivative
+works are solely in the form of machine-executable object code generated by
+a source language processor.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, TITLE AND NON-INFRINGEMENT. IN NO EVENT
+SHALL THE COPYRIGHT HOLDERS OR ANYONE DISTRIBUTING THE SOFTWARE BE LIABLE
+FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
 === euclid 0.22.14 (MIT OR Apache-2.0)
     https://github.com/servo/euclid
 --- LICENSE-MIT
@@ -1315,6 +1383,17 @@ http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
 <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 option. All files in the project carrying such notice may not be
 copied, modified, or distributed except according to those terms.
+
+=== fax 0.2.7 (MIT)
+    https://github.com/pdf-rs/fax
+--- LICENSE
+Copyright © 2021 The pdf-rs contributers.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 === fdeflate 0.3.7 (MIT OR Apache-2.0)
     https://github.com/image-rs/fdeflate
@@ -2295,6 +2374,29 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+=== half 2.7.1 (MIT OR Apache-2.0)
+    https://github.com/VoidStarKat/half-rs
+--- LICENSE-MIT
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 === harfrust 0.12.0 (MIT)
     https://github.com/harfbuzz/harfrust
@@ -3669,6 +3771,29 @@ CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+=== quick-error 2.0.1 (MIT/Apache-2.0)
+    http://github.com/tailhook/quick-error
+--- LICENSE-MIT
+Copyright (c) 2015 The quick-error Developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 === quote 1.0.47 (MIT OR Apache-2.0)
     https://github.com/dtolnay/quote
 --- LICENSE-MIT
@@ -4967,6 +5092,33 @@ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
 
+=== syn 2.0.119 (MIT OR Apache-2.0)
+    https://github.com/dtolnay/syn
+--- LICENSE-MIT
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
 === syn 3.0.9 (MIT OR Apache-2.0)
     https://github.com/dtolnay/syn
 --- LICENSE-MIT
@@ -5058,6 +5210,31 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+=== tiff 0.11.3 (MIT)
+    https://github.com/image-rs/image-tiff
+--- LICENSE
+MIT License
+
+Copyright (c) 2018 PistonDevelopers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 === tinystr 0.8.5 (Unicode-3.0)
     https://github.com/unicode-org/icu4x
@@ -6070,6 +6247,31 @@ agreement.
 of Data, including for example machine learning models and models'
 insights.
 
+=== weezl 0.1.12 (MIT OR Apache-2.0)
+    https://github.com/image-rs/weezl
+--- LICENSE-MIT
+The MIT License (MIT)
+
+Copyright (c) HeroicKatora 2020
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 === windows-link 0.2.1 (MIT OR Apache-2.0)
     https://github.com/microsoft/windows-rs
 --- license-mit
@@ -6655,6 +6857,35 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
+=== zerocopy-derive 0.8.63 (BSD-2-Clause OR Apache-2.0 OR MIT)
+    https://github.com/google/zerocopy
+--- LICENSE-MIT
+Copyright 2023 The Fuchsia Authors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
 === zerofrom 0.1.8 (Unicode-3.0)
     https://github.com/unicode-org/icu4x
 --- LICENSE
@@ -6983,6 +7214,56 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
+
+=== zune-core 0.5.3 (MIT OR Apache-2.0 OR Zlib)
+    https://github.com/etemesi254/zune-image
+--- LICENSE-MIT
+MIT License
+
+Copyright (c) zune-image developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+=== zune-jpeg 0.5.15 (MIT OR Apache-2.0 OR Zlib)
+    https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg
+--- LICENSE-MIT
+MIT License
+
+Copyright (c) zune-image developers
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 3. FONTS EMBEDDED IN Organimizer.exe (from epaint_default_fonts)
 ------------------------------------------------------------------------

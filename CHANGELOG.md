@@ -56,8 +56,15 @@ Linux and under Wine only, not on a real Windows PC.
 - **Favorites**: ☆/★ toggle next to the folder field (Organize and Plex),
   Favorites menu, Manage Favorites window (add, rename, edit path, remove,
   reorder).
+- **Fix (found in Windows testing):** Ctrl+V did not paste text copied in
+  another program into any text field (e.g. the TMDB key in Tools > Options):
+  the GUI was built without the system clipboard (eframe `clipboard`
+  feature), so only an in-app clipboard existed. Copy and paste now use the
+  Windows clipboard in every field (Options, blacklist and favorites editors,
+  Plex "Correct this file" panel, main window).
 - Tests: 130 unit tests (Plex parser cases, blacklist, protected types,
-  favorites, settings migration, plus all 2.x tests).
+  favorites, settings migration, plus all 2.x tests) and 3 text-input
+  regression tests (`tests/text_input.rs`).
 
 ## 2.0.5 (git tag `v2.0.5`, 2026-11-21)
 - Help > About: app icon (64x64), version, publisher (PrimeCrew Software),

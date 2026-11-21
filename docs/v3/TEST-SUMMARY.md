@@ -9,7 +9,9 @@ before merging, tagging or releasing.
 - `cargo test --no-default-features`: 130 unit tests pass (Plex name parser,
   extras/subtitle linking, blacklist matching and defaults, protected file
   types, custom type lists, favorites, PhotoSorter settings migration, TMDB
-  request building and response parsing, plus all 2.x tests).
+  request building and response parsing, plus all 2.x tests), and 3
+  regression tests in `tests/text_input.rs` (eframe built with the system
+  clipboard; typing and Ctrl+V paste reach a password field inside a modal).
 - `cargo clippy --target x86_64-pc-windows-gnu`: no warnings.
 
 ## Manual (Wine, Windows 10 mode)
@@ -26,6 +28,7 @@ before merging, tagging or releasing.
 | Plex tab on a sample folder (movies, TV episodes, subtitles, trailer, featurette, sample clip): scan, proposals, correct a low-confidence row | OK |
 | Plex Apply + Undo on the sample (build from earlier the same day; the Plex code did not change after it) | OK, undo restored every file |
 | TMDB with an invalid key | OK: clear error dialog, nothing changed (no real key was used in testing) |
+| Tools > Options: type into the TMDB key field, Ctrl+V paste of a key copied outside the app (xclip), paste into Custom file types, Save -> values in Organimizer.ini | Before the fix: typing OK, paste did nothing. After: OK |
 | F1 opens HELP.md (incl. "Getting a TMDB API key") | OK |
 
 ## Known limitations of this test run
