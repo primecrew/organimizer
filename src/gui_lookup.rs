@@ -373,7 +373,7 @@ impl App {
                 ui.selectable_value(&mut p.kind, SearchKind::Tv, "TV show");
                 let r1 = ui.add(egui::TextEdit::singleline(&mut p.query).desired_width(fs * 16.0).hint_text("Title"));
                 ui.label("Year");
-                let r2 = ui.add(egui::TextEdit::singleline(&mut p.year).desired_width(fs * 3.5).hint_text("any"));
+                let r2 = ui.add(egui::TextEdit::singleline(&mut p.year).desired_width(fs * 4.5).hint_text("any"));
                 let enter = (r1.lost_focus() || r2.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.button("Search again").clicked() || enter {
                     research = true;
@@ -478,7 +478,7 @@ impl App {
             ui.set_width((fs * 52.0).min(ctx.content_rect().width() - 40.0));
             ui.heading(format!("Match your files: {}", plex::name_with_year(&m.chosen.title, m.chosen.year)));
             ui.label(
-                RichText::new("Left: your files. Right: what TMDB has. Pick another entry, use ▲ ▼, or untick a file to leave it as it is.")
+                RichText::new("Left: your files. Right: what TMDB has. Pick another entry, use Up / Down, or untick a file to leave it as it is.")
                     .weak(),
             );
             ui.separator();
@@ -519,13 +519,20 @@ impl App {
                                     _ => "movie".into(),
                                 };
                                 let dur = r.duration.map(|d| format!(", {}", organimizer::duration::label(d))).unwrap_or_default();
-                                ui.add(egui::Label::new(format!("{name}  ({what}{dur})")).truncate())
-                                    .on_hover_text(r.source.display().to_string());
+                                let label = format!("{name}  ({what}{dur})");
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(fs * 19.0, fs + 6.0),
+                                    Layout::left_to_right(Align::Center),
+                                    |ui| {
+                                        ui.set_min_width(fs * 19.0);
+                                        ui.add(egui::Label::new(label).truncate()).on_hover_text(r.source.display().to_string());
+                                    },
+                                );
                                 ui.horizontal(|ui| {
-                                    if ui.small_button("▲").on_hover_text("Previous TMDB entry").clicked() {
+                                    if ui.small_button("Up").on_hover_text("Previous TMDB entry").clicked() {
                                         actions.push((pi, None, Some(false), false));
                                     }
-                                    if ui.small_button("▼").on_hover_text("Next TMDB entry").clicked() {
+                                    if ui.small_button("Down").on_hover_text("Next TMDB entry").clicked() {
                                         actions.push((pi, None, Some(true), false));
                                     }
                                 });

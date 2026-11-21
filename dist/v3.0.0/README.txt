@@ -134,10 +134,16 @@ PLEX MEDIA TAB
                  scanned folder). Blacklisted or missing folders block
                  Apply with a message.
   TMDB           Shows whether the optional TMDB lookup is on (see TMDB).
+  What you have  One line per movie (with its extras and subtitles) or TV
+                 season, e.g. "Looks like: Alien (1979) - 1 movie, 3
+                 extras", with a "Look up" button (TMDB; greyed out without
+                 a key) and "Look up the selected file".
   Table          One row per video and subtitle: include checkbox, match
                  (colored dot: green = high, amber = medium, red = low
-                 confidence, "Edited" once you changed it), type, current
-                 file, new location and notes. Filter by name; "Only files
+                 confidence, "Edited" once you changed it, "TMDB" once
+                 confirmed on TMDB), type, current file, new location and
+                 Why (the reasons in plain words; hover for all of them,
+                 notes to check come first). Filter by name; "Only files
                  that need a look" hides the sure ones.
   Correct this file  (click a file name) Type (Movie / TV episode / Extra /
                  Skip), title, year, edition (movies), season, episode,
@@ -213,13 +219,18 @@ FAVORITES  (Favorites menu; Favorites > Manage Favorites...)
   folder; changes are saved at once ([Favorites] in the INI).
 
 TMDB  (optional, off by default; Tools > Options > TMDB lookup)
-  Looks up movie / TV titles on The Movie Database to confirm a match. You
+  Looks up movie / TV titles on The Movie Database to confirm a match
+  ("Look up" in What you have: results with posters, then a match window
+  with your files on the left and TMDB's movie / episodes on the right; OK
+  writes the names into the preview, Apply moves the files). You
   need your own free TMDB API key: HELP.md section "Getting a TMDB API key"
   explains every step (free account, Settings > API, request a Developer
   key, copy the API Read Access Token or the v3 API key, paste it in
   Tools > Options). The key is stored only in Organimizer.ini on your PC
-  and sent only to api.themoviedb.org (HTTPS) when you click "Look up on
-  TMDB". Without it everything works offline. Network errors, a wrong key
+  and sent only to api.themoviedb.org (HTTPS) when you click "Look up"
+  (poster thumbnails come from image.tmdb.org). "Add {tmdb-ID} to the
+  folder name" (Options, on by default) names folders like
+  "Alien (1979) {tmdb-348}". Without it everything works offline. Network errors, a wrong key
   (401) or rate limits (429) show a message and change nothing.
   This product uses the TMDB API but is not endorsed or certified by TMDB.
 

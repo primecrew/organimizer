@@ -62,9 +62,37 @@ Linux and under Wine only, not on a real Windows PC.
   feature), so only an in-app clipboard existed. Copy and paste now use the
   Windows clipboard in every field (Options, blacklist and favorites editors,
   Plex "Correct this file" panel, main window).
-- Tests: 130 unit tests (Plex parser cases, blacklist, protected types,
-  favorites, settings migration, plus all 2.x tests) and 3 text-input
-  regression tests (`tests/text_input.rs`).
+- **Smarter Plex recognition** with a **Why** column: every row says in
+  plain words why it got its name and folder (file name, sibling files,
+  parent / grandparent folders, disc-rip structure, runtime, TMDB).
+  "Almost right" names are normalised to exact Plex syntax (separators,
+  year without parentheses or in brackets, editions, `S2 E5`, `2x05`,
+  `Season 2 Episode 5`, `Season2` / `S02` / `Series 3` folders, unpadded
+  numbers, a shorter show name in the file than in the folder). Extras lose
+  the movie title in their name (`alien making of.mkv` ->
+  `Behind The Scenes\Making of.mkv`, `Featurette - The Beast Within` ->
+  `The Beast Within`); a keyword wins inside a generic `Extras` folder.
+  Subtitles follow a video with the same name and other separators. Disc
+  rips: MakeMKV `LABEL_t00` / `title_t00`, `B1_t03`, `BDMV` / `VIDEO_TS`;
+  the longest file of a title is the main movie, shorter ones become extras
+  by keyword or runtime. Media duration is read from MP4/MOV, MKV/WebM and
+  AVI headers (pure Rust).
+- **TMDB lookup windows** (Plex tab, optional, own key): "What you have"
+  groups (movie + extras + subtitles, TV show per season) with Look up
+  buttons; results with poster thumbnails, original title, overview and
+  TMDB id, editable search and Movie / TV switch; a side-by-side match
+  window (auto-match by season / episode, TMDB videos as name hints for
+  extras, drop-down / Up / Down / untick); OK writes the names into the
+  preview ("TMDB" in the Match column, "Confirmed on TMDB" in Why). Option
+  "Add {tmdb-ID} to the folder name" (default on). Session cache, request
+  pacing and one retry after HTTP 429. Self-contained modules
+  (`lookup.rs`, `gui_lookup.rs`) so it can be backed out.
+- Tests: 147 unit tests (Plex parser and recognition, duration headers,
+  lookup grouping / matching / JSON fixtures, blacklist, protected types,
+  favorites, settings migration, plus all 2.x tests), 111 near-miss name
+  fixtures (`tests/near_miss.rs`) and 3 text-input regression tests
+  (`tests/text_input.rs`); a Wine UI flow against a local mock TMDB
+  (`tests/wine_lookup_flow.sh`, `tests/mock_tmdb.py`).
 
 ## 2.0.5 (git tag `v2.0.5`, 2026-11-21)
 - Help > About: app icon (64x64), version, publisher (PrimeCrew Software),

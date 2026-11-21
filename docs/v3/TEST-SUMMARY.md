@@ -6,12 +6,20 @@ before merging, tagging or releasing.
 
 ## Automated
 
-- `cargo test --no-default-features`: 130 unit tests pass (Plex name parser,
-  extras/subtitle linking, blacklist matching and defaults, protected file
-  types, custom type lists, favorites, PhotoSorter settings migration, TMDB
-  request building and response parsing, plus all 2.x tests), and 3
-  regression tests in `tests/text_input.rs` (eframe built with the system
-  clipboard; typing and Ctrl+V paste reach a password field inside a modal).
+- `cargo test --no-default-features`: 154 tests pass:
+  - 147 unit tests (Plex name parser, per-file recognition and Why text,
+    disc rips and runtime rules, media duration from MP4/MKV/AVI headers,
+    TMDB lookup grouping / query building / episode mapping / reassign /
+    apply and JSON parsing against hand-written fixtures in
+    `tests/fixtures/tmdb`, extras/subtitle linking, blacklist, protected
+    file types, favorites, settings migration, plus all 2.x tests);
+  - `tests/near_miss.rs`: 111 "almost named right" inputs with the exact
+    expected Plex path (`Alien.1979.Directors.Cut.1080p.mkv`,
+    `The Expanse S2 E5.mkv`, `Expanse - 2x05 - Doors and Corners.mkv`,
+    `alien making of.mkv`, `Season2` folders, ...) and a check that every
+    row has a Why text;
+  - 3 regression tests in `tests/text_input.rs` (system clipboard; typing
+    and Ctrl+V paste reach a password field inside a modal).
 - `cargo clippy --target x86_64-pc-windows-gnu`: no warnings.
 
 ## Manual (Wine, Windows 10 mode)
@@ -30,6 +38,8 @@ before merging, tagging or releasing.
 | TMDB with an invalid key | OK: clear error dialog, nothing changed (no real key was used in testing) |
 | Tools > Options: type into the TMDB key field, Ctrl+V paste of a key copied outside the app (xclip), paste into Custom file types, Save -> values in Organimizer.ini | Before the fix: typing OK, paste did nothing. After: OK |
 | F1 opens HELP.md (incl. "Getting a TMDB API key") | OK |
+| Plex tab, Why column and "Why this suggestion" on near-miss demo files (`Alien.1979.1080p.BluRay.x264` with `alien making of.mkv`, trailer, featurette, subtitle; `The Expanse\Season2` with `2x01`, `S2 E2`, `s2e5` names) | OK: every row has a reason; runtimes shown |
+| TMDB lookup flow against a local mock TMDB (`tests/wine_lookup_flow.sh` + `tests/mock_tmdb.py`, made-up key, hidden debug override of the API base): What you have -> Look up -> results with posters -> This one -> match window -> Up swaps two episodes -> OK -> preview shows `Alien (1979) {tmdb-348}` and `The Expanse (2015) {tmdb-63639}\Season 02\... - s02e01 - Safe.mkv`, Match "TMDB" | OK (screenshots `lookup-results.png`, `lookup-match.png`, `lookup-preview.png`) |
 
 ## Known limitations of this test run
 
@@ -40,7 +50,9 @@ before merging, tagging or releasing.
   artefact (the same happens with PhotoSorter 2.0.5, and the app itself only
   repaints on input).
 - A real TMDB lookup was not tested (no API key); the request format is
-  covered by unit tests and an invalid-key request reached TMDB (HTTP 401).
+  covered by unit tests, an invalid-key request reached TMDB (HTTP 401),
+  and the whole lookup flow ran against a local mock server serving
+  hand-written fixtures in TMDB's format.
 - The exe and setup are unsigned: Windows SmartScreen will warn on first
   start. Check the SHA-256 against `Organimizer-3.0.0-SHA256SUMS.txt`.
 

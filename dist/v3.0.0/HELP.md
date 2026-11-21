@@ -9,7 +9,7 @@ The full reference is `README.txt` next to `Organimizer.exe`.
 
 Contents: Quick start (Organize) | Quick start (Plex Media) | File types and
 protection | Folder blacklist | Favorites | Getting a TMDB API key |
-Portable or installed | Coming from PhotoSorter | Safety | Troubleshooting |
+Looking up titles on TMDB | Portable or installed | Coming from PhotoSorter | Safety | Troubleshooting |
 Keyboard shortcuts | About and license
 
 ## Quick start: Organize
@@ -56,8 +56,21 @@ Keyboard shortcuts | About and license
    taken name gets ` (1)`), and **Undo last run** moves everything back.
    Old, now empty folders are left in place (nothing is ever deleted).
 
+**Why this suggestion?** The **Why** column (and "Why this suggestion" in
+the right-hand panel) says in plain words how each proposal was worked out,
+for example `"making of" in the name, next to Alien (1979).mkv -> Behind The
+Scenes` or `in a "Season2" folder -> Season 2`. Organimizer looks at the file
+name, the files next to it, the parent and grandparent folder names, disc
+rip names (`title_t00`, `LABEL_t03`, `VIDEO_TS`, `BDMV`) and the runtime:
+when several files have the same title, the longest one is the movie and the
+shorter ones become extras (under 2.5 minutes: trailer, under 45 minutes:
+featurette). Names that are "almost right" are fixed to the exact Plex
+spelling: `Alien.1979.Directors.Cut.mkv`, `The Expanse S2 E5.mkv`,
+`Expanse - 2x05 - Doors and Corners.mkv`, `alien making of.mkv`, a `Season2`
+folder, a year without parentheses and so on.
+
 Optional: turn on the **TMDB lookup** (see the next sections) and click
-**Look up on TMDB** in the right-hand panel to confirm a title against
+**Look up** in "What you have" to confirm titles and episode names against
 The Movie Database. You always choose the match yourself.
 
 ## File types and protection
@@ -130,7 +143,8 @@ Good to know:
 
 - The key is stored **only on your PC**, in `Organimizer.ini` (see
   "Portable or installed"), and it is sent only to TMDB
-  (`api.themoviedb.org`) when you click **Look up on TMDB**. Organimizer has
+  (`api.themoviedb.org`) when you click **Look up**; poster thumbnails come
+from `image.tmdb.org` without the key. Organimizer has
   no server of its own and sends nothing else. Do not share the INI file if
   you want to keep the key private.
 - Lookups only suggest titles: you choose the right match, and nothing is
@@ -139,6 +153,50 @@ Good to know:
   offline analysis keeps working. To stop using TMDB, untick the option or
   clear the key.
 - This product uses the TMDB API but is not endorsed or certified by TMDB.
+
+## Looking up titles on TMDB
+
+Needs your own key (previous section) and the TMDB option switched on;
+otherwise the **Look up** buttons are greyed out and their tooltip says what
+to do.
+
+1. **Scan** as usual. Above the list, **What you have** shows what
+   Organimizer found, one line per movie or per TV season, for example
+   `Looks like: Alien (1979) - 1 movie, 3 extras, 1 subtitle` or
+   `Looks like: The Expanse - Season 2, 4 episodes`.
+2. Click **Look up** on a line (or select a file in the list and click
+   **Look up the selected file**). The results window shows the matches from
+   TMDB with poster, title, year, original title, a short description and
+   the TMDB number. If the right one is missing, change the title or year,
+   switch between **Movie** and **TV show**, and click **Search again**.
+3. Click **This one** on the right match. The **match window** shows your
+   files on the left and what TMDB has on the right:
+   - a TV season: every file is matched to the TMDB episode with the same
+     season and episode number (with its title and runtime);
+   - a movie: the main file is matched to the movie; extras keep their own
+     name and folder unless TMDB lists a video with a very similar name
+     (TMDB videos are only name suggestions).
+   Change a match with the drop-down list or the **Up** / **Down** buttons
+   (two files never get the same episode: they swap), or untick a file to
+   leave it as it is.
+4. Click **OK - use these names**. The names go into the preview, marked
+   **TMDB** in the Match column, with "Confirmed on TMDB" in the Why column.
+   Nothing is moved yet: check the list and click **Apply** as usual
+   (never overwrites, **Undo last run** puts everything back).
+
+Good to know:
+
+- **Tools > Options > TMDB > Add {tmdb-ID} to the folder name** (on by
+  default) names the folder like `Alien (1979) {tmdb-348}`, so Plex uses
+  exactly that title instead of guessing.
+- Titles and episode names come in the language set in Options (for example
+  `en-US`, `de-DE`).
+- Each search is asked only once while the app is open; Organimizer also
+  waits a little between requests and tries once more if TMDB says "too
+  many requests". Posters are small thumbnails from `image.tmdb.org` and are
+  simply left out if they cannot be loaded.
+- No internet or a wrong key shows a plain message in the window; nothing
+  else changes.
 
 ## Portable or installed
 

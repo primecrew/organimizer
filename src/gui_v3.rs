@@ -1407,7 +1407,9 @@ fn why_text(r: &plex::Row, rows: &[plex::Row]) -> (String, String) {
         return (t.clone(), t);
     }
     let mut reasons = r.analysis.why.clone();
-    if r.analysis != r.detected {
+    // TMDB confirmation first: it is the strongest reason
+    reasons.sort_by_key(|w| !w.starts_with("Confirmed on TMDB"));
+    if r.analysis != r.detected && !r.analysis.from_tmdb {
         reasons.insert(0, "Changed by you".into());
     }
     if let Some(d) = r.duration
@@ -1418,7 +1420,11 @@ fn why_text(r: &plex::Row, rows: &[plex::Row]) -> (String, String) {
     if reasons.is_empty() {
         return (String::new(), "No reasons recorded".into());
     }
-    let short = reasons.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join("; ");
+    let short = if r.analysis.from_tmdb {
+        reasons.iter().take(2).cloned().collect::<Vec<_>>().join("; ")
+    } else {
+        reasons.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join("; ")
+    };
     let full = format!("Why:\n- {}", reasons.join("\n- "));
     (short, full)
 }
