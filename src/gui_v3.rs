@@ -1293,7 +1293,7 @@ impl App {
             .column(Column::initial(fs * 26.0).at_least(80.0).clip(true))
             .column(Column::remainder().at_least(60.0).clip(true))
             .header(row_h + 4.0, |mut h| {
-                for t in ["", "Match", "Type", "Current file", "New location (Plex)", "Notes"] {
+                for t in ["", "Match", "Type", "Current file", "New location (Plex)", "Why"] {
                     h.col(|ui| {
                         ui.label(RichText::new(t).strong());
                     });
@@ -1369,7 +1369,11 @@ impl App {
                             notes.extend(it.warnings.iter().filter(|w| it.status == Status::Move || it.status == Status::AlreadySorted || !w.is_empty()).cloned());
                         }
                         notes.dedup();
-                        ui.add(egui::Label::new(RichText::new(notes.join("; ")).weak().small()).truncate());
+                        let (short, full) = why_text(r, rows);
+                        let line = if notes.is_empty() { short } else { format!("{}  |  {short}", notes.join("; ")) };
+                        let tip = if notes.is_empty() { full } else { format!("{full}\n\nTo check:\n- {}", notes.join("\n- ")) };
+                        let rt = if notes.is_empty() { RichText::new(line).weak().small() } else { RichText::new(line).color(amber()).small() };
+                        ui.add(egui::Label::new(rt).truncate()).on_hover_text(tip);
                     });
                 });
             });
@@ -1387,6 +1391,32 @@ impl App {
             self.plex.selected = if selected == Some(i) { None } else { Some(i) };
         }
     }
+}
+
+/// The Why column: a short line for the table and the full reasoning for the
+/// tooltip / editor, in plain words.
+fn why_text(r: &plex::Row, rows: &[plex::Row]) -> (String, String) {
+    if let Some(v) = r.subtitle_of.and_then(|v| rows.get(v)) {
+        let name = v.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let tags = if r.sub_tags.is_empty() { String::new() } else { format!(" (language/flags: {})", r.sub_tags.join(".")) };
+        let t = format!("subtitle with the same name as {name} -> follows it{tags}");
+        return (t.clone(), t);
+    }
+    let mut reasons = r.analysis.why.clone();
+    if r.analysis != r.detected {
+        reasons.insert(0, "Changed by you".into());
+    }
+    if let Some(d) = r.duration
+        && !reasons.iter().any(|w| w.contains(&organimizer::duration::label(d)))
+    {
+        reasons.push(format!("runtime {}", organimizer::duration::label(d)));
+    }
+    if reasons.is_empty() {
+        return (String::new(), "No reasons recorded".into());
+    }
+    let short = reasons.iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join("; ");
+    let full = format!("Why:\n- {}", reasons.join("\n- "));
+    (short, full)
 }
 
 impl App {
@@ -1413,6 +1443,17 @@ impl App {
         });
         let name = self.plex.rows[i].source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         ui.label(RichText::new(&name).monospace());
+        {
+            let (_, full) = why_text(&self.plex.rows[i], &self.plex.rows);
+            egui::CollapsingHeader::new("Why this suggestion")
+                .id_salt("plex-why")
+                .default_open(true)
+                .show(ui, |ui| {
+                    for line in full.lines().skip(1) {
+                        ui.label(RichText::new(line).small());
+                    }
+                });
+        }
         ui.separator();
         if let Some(v) = video_of {
             let vname = self
