@@ -22,7 +22,7 @@ the SHA-256 from the release notes.";
 /// License line (About); the full text ships as LICENSE beside the exe.
 pub const LICENSE_LINE: &str = "Licensed under GPL v3";
 
-/// "PrimeCrew Organimizer 3.0.0".
+/// "PrimeCrew Organimizer 3.0.1".
 pub fn title_with_version() -> String {
     format!("{PRODUCT} {VERSION}")
 }
@@ -42,8 +42,8 @@ mod tests {
         assert_eq!(PRODUCT, "PrimeCrew Organimizer");
         assert_eq!(SHORT_NAME, "Organimizer");
         assert_eq!(PUBLISHER, "PrimeCrew Software");
-        assert_eq!(VERSION, "3.0.0");
-        assert_eq!(title_with_version(), "PrimeCrew Organimizer 3.0.0");
+        assert_eq!(VERSION, "3.0.1");
+        assert_eq!(title_with_version(), "PrimeCrew Organimizer 3.0.1");
         assert!(copyright().contains("PrimeCrew Software"));
         // build.rs writes the version resource from literals; keep them in sync
         let build = include_str!("../build.rs");

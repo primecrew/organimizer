@@ -4,6 +4,15 @@ All versions are Windows 10/11 builds (portable exe; from 2.0.5 also an
 installer). None of them is code-signed, and so far they have been tested on
 Linux and under Wine only, not on a real Windows PC.
 
+## 3.0.1 – version bump, lookup and recognition build (branch `v3-organimizer`, not released yet)
+- Version bump of the 3.0.0 build already given for Windows testing: the
+  smarter per-file Plex recognition with the Why column, and the TMDB
+  lookup windows (Mp3tag / Discogs style). No other feature changes.
+- Installer `Organimizer-3.0.1-setup.exe` and portable zip
+  `Organimizer-3.0.1-win64.zip`. An in-place upgrade from 3.0.0 shows
+  "Updating existing installation: PrimeCrew Organimizer v3.0.0 → v3.0.1"
+  and keeps the install folder.
+
 ## 3.0.0 – PrimeCrew Organimizer (branch `v3-organimizer`, not released yet)
 - **Renamed** PhotoSorter → **PrimeCrew Organimizer**: window title,
   header, About, `Organimizer.exe` (version info ProductName "PrimeCrew

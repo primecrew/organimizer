@@ -1,4 +1,4 @@
-# PrimeCrew Organimizer 3.0.0
+# PrimeCrew Organimizer 3.0.1
 
 By PrimeCrew Software. Formerly **PhotoSorter** (2.x; the last PhotoSorter
 release is [v2.0.5](https://github.com/primecrew/organimizer/releases/tag/v2.0.5)).
@@ -57,8 +57,8 @@ deleted, and the last run can be undone.
   (no registry). PhotoSorter's `PhotoSorter.ini` is imported on first start
   and never modified.
 
-**Download:** `Organimizer-3.0.0-win64.zip` (portable) or
-`Organimizer-3.0.0-setup.exe` (installer: Start Menu › PrimeCrew Software ›
+**Download:** `Organimizer-3.0.1-win64.zip` (portable) or
+`Organimizer-3.0.1-setup.exe` (installer: Start Menu › PrimeCrew Software ›
 PrimeCrew Organimizer, Add/Remove Programs "PrimeCrew Organimizer"; it
 upgrades an installed PhotoSorter 2.x and removes the old program, shortcut
 and Add/Remove entry). Both contain README.txt, HELP.md, LICENSE and
@@ -69,9 +69,9 @@ warn on first run (More info > Run anyway; compare the SHA-256 published with
 each release). It has been tested on Linux and under Wine only, not yet on a
 real Windows PC.
 
-End-user docs: `dist/v3.0.0/README.txt` and `dist/v3.0.0/HELP.md` (shipped
+End-user docs: `dist/v3.0.1/README.txt` and `dist/v3.0.1/HELP.md` (shipped
 as `README.txt` and `HELP.md`, together with `LICENSE` and
-`dist/v3.0.0/THIRD-PARTY-NOTICES.txt`); older versions under `dist/v2.*`,
+`dist/v3.0.1/THIRD-PARTY-NOTICES.txt`); older versions under `dist/v2.*`,
 v1 docs: `dist/README.txt`. Version history: [CHANGELOG.md](CHANGELOG.md).
 Test notes: `docs/v2/TEST-SUMMARY.md`, `docs/v3/TEST-SUMMARY.md`;
 screenshots: `docs/v3/screenshots/`.
@@ -210,7 +210,7 @@ folder), optional desktop shortcut, Add/Remove Programs entry
 upgrade with the "Updating existing installation: … v<old> → v<new>"
 banner. An installed PhotoSorter 2.x (`...\Uninstall\PhotoSorter`) is
 detected as an upgrade ("PhotoSorter v2.0.5 → PrimeCrew Organimizer
-v3.0.0"); after installing, setup removes the old PhotoSorter program
+v3.0.1"); after installing, setup removes the old PhotoSorter program
 files, shortcuts and uninstall entry (never settings, undo logs or user
 files). It writes `Organimizer.installed` next to the exe;
 `settings::choose_ini_path` then uses
@@ -221,7 +221,7 @@ THIRD-PARTY-NOTICES.txt from `cargo metadata`.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4, 2.0.5, 3.0.0.
+See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4, 2.0.5, 3.0.0, 3.0.1.
 
 ## License
 

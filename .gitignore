@@ -16,6 +16,8 @@ dist/v2.0.4/*.exe
 dist/v2.0.5/*.exe
 !dist/v3.0.0/
 dist/v3.0.0/*.exe
+!dist/v3.0.1/
+dist/v3.0.1/*.exe
 
 # secrets / local environment (never commit)
 .env

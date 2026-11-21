@@ -1,4 +1,4 @@
-# PrimeCrew Organimizer 3.0.0 - test summary
+# PrimeCrew Organimizer 3.0.1 - test summary
 
 Branch `v3-organimizer`, not released. All tests below ran on Linux with
 **Wine** (no real Windows machine was available), so please test on Windows
@@ -41,7 +41,15 @@ before merging, tagging or releasing.
 | Plex tab, Why column and "Why this suggestion" on near-miss demo files (`Alien.1979.1080p.BluRay.x264` with `alien making of.mkv`, trailer, featurette, subtitle; `The Expanse\Season2` with `2x01`, `S2 E2`, `s2e5` names) | OK: every row has a reason; runtimes shown |
 | TMDB lookup flow against a local mock TMDB (`tests/wine_lookup_flow.sh` + `tests/mock_tmdb.py`, made-up key, hidden debug override of the API base): What you have -> Look up -> results with posters -> This one -> match window -> Up swaps two episodes -> OK -> preview shows `Alien (1979) {tmdb-348}` and `The Expanse (2015) {tmdb-63639}\Season 02\... - s02e01 - Safe.mkv`, Match "TMDB" | OK (screenshots `lookup-results.png`, `lookup-match.png`, `lookup-preview.png`) |
 
+## 3.0.1 Wine smoke (own Xvfb display and Wine prefix)
+
+| Test | Result |
+|---|---|
+| Portable `Organimizer.exe` launch; header shows v3.0.1; Help > About shows "Version 3.0.1" | OK |
+| Installer upgrade over a silent 3.0.0 install (GUI, new empty prefix) | OK: first page banner "Updating existing installation: PrimeCrew Organimizer v3.0.0 -> v3.0.1" (Wine draws "->" as a box, same as 3.0.0); read-only "Installed in: %LOCALAPPDATA%\Programs\Organimizer". Cancel left DisplayVersion at 3.0.0 |
+
 ## Known limitations of this test run
+
 
 - Wine only. The installer's "->" arrow in the upgrade banner is drawn with
   "→", which the Wine font shows as a box; Windows renders it (same as in the
@@ -54,6 +62,6 @@ before merging, tagging or releasing.
   and the whole lookup flow ran against a local mock server serving
   hand-written fixtures in TMDB's format.
 - The exe and setup are unsigned: Windows SmartScreen will warn on first
-  start. Check the SHA-256 against `Organimizer-3.0.0-SHA256SUMS.txt`.
+  start. Check the SHA-256 against `Organimizer-3.0.1-SHA256SUMS.txt` (3.0.0 sums remain in `Organimizer-3.0.0-SHA256SUMS.txt`).
 
 Screenshots: `docs/v3/screenshots/`.

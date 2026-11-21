@@ -11,7 +11,7 @@
 ;   setup asks you to close it first.
 ; - 3.0 rename: an installed PhotoSorter (2.x, <LEGACY_ID> uninstall entry) counts as an
 ;   upgrade. The banner reads "Updating existing installation: PhotoSorter v2.0.5 →
-;   PrimeCrew Organimizer v3.0.0"; Organimizer goes next to it (...\PhotoSorter →
+;   PrimeCrew Organimizer v3.0.1"; Organimizer goes next to it (...\PhotoSorter →
 ;   ...\Organimizer, same mode). After the new files are in place setup removes only
 ;   PhotoSorter's own program files, its Start Menu / desktop shortcuts and its Add/Remove
 ;   entry. PhotoSorter.ini, presets, undo logs and photos are never deleted; the app imports
@@ -478,7 +478,7 @@ Function ReadyPage
     Abort
   ${EndIf}
   ${If} $Legacy == 1
-    ; "PhotoSorter v2.0.5 → PrimeCrew Organimizer v3.0.0" is longer: two lines
+    ; "PhotoSorter v2.0.5 → PrimeCrew Organimizer v3.0.1" is longer: two lines
     CreateFont $BannerFont "$(^Font)" 9 700
     ${NSD_CreateLabel} 0 0 100% 26u "$Banner"
     Pop $1
