@@ -2857,7 +2857,15 @@ impl App {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("Showing {} of {} files", self.view.len(), total)).weak().small());
             if stale {
-                ui.label(RichText::new("(updating…)").color(amber()).small());
+                // the live preview only runs for a usable folder and valid rules; say so
+                // instead of "updating" forever when the folder above is invalid or blocked
+                let root = self.root();
+                let usable = !self.s.folder_trimmed().is_empty()
+                    && root.is_dir()
+                    && self.rule_errors.is_empty()
+                    && self.blocked_reason(&root).is_none();
+                let t = if usable { "(updating…)" } else { "(old preview: fix the folder or rules above)" };
+                ui.label(RichText::new(t).color(amber()).small());
             }
         });
 

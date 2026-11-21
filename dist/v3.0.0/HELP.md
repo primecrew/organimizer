@@ -7,32 +7,32 @@ into the folder layout Plex expects (the **Plex Media** tab).
 
 The full reference is `README.txt` next to `Organimizer.exe`.
 
-Contents: Quick start (Organize) · Quick start (Plex Media) · File types and
-protection · Folder blacklist · Favorites · Getting a TMDB API key ·
-Portable or installed · Coming from PhotoSorter · Safety · Troubleshooting ·
-Keyboard shortcuts · About and license
+Contents: Quick start (Organize) | Quick start (Plex Media) | File types and
+protection | Folder blacklist | Favorites | Getting a TMDB API key |
+Portable or installed | Coming from PhotoSorter | Safety | Troubleshooting |
+Keyboard shortcuts | About and license
 
 ## Quick start: Organize
 
-1. **Choose a folder.** Click **Browse…** (or File > Open Folder…, Ctrl+O),
+1. **Choose a folder.** Click **Browse...** (or File > Open Folder..., Ctrl+O),
    drag a folder onto the window, or pick one from the **Favorites** menu.
    "Include subfolders" is off by default.
 2. **Choose the file types.** Next to "File types" pick *Images & videos*
    (the default, same as PhotoSorter), *Images*, *Videos*, *Audio*,
    *Documents*, *Archives*, *All files* or *Custom list* (Tools > Options).
-3. **Add rename rules (optional).** In step 2 click **➕ Add rule**. Rules
+3. **Add rename rules (optional).** In step 2 click **Add rule**. Rules
    run top to bottom on the name without its extension.
 4. **Choose the output.** In step 3 leave **Sort into date folders** on to
    move each file into a folder like `March 2024` next to it, or turn it off
    to only rename.
-5. **Check the preview**, then click **✔ Apply** and confirm. An undo log is
-   written first; **↩ Undo last run** puts everything back.
+5. **Check the preview**, then click **Apply** and confirm. An undo log is
+   written first; **Undo last run** puts everything back.
 
 ## Quick start: Plex Media
 
 1. Click the **Plex Media** tab at the top.
 2. **Source:** choose the folder with your movies or episodes (downloads,
-   rips, an old library) and click **🔍 Scan**. Nothing is changed.
+   rips, an old library) and click **Scan**. Nothing is changed.
 3. **Destination:** *In place* builds the Plex folders inside the scanned
    folder. *Library folders* moves movies into your Movies library folder and
    episodes into your TV shows folder.
@@ -47,17 +47,17 @@ Keyboard shortcuts · About and license
    title, extra type and whether an extra belongs to a movie or a show.
    "Use for all files of this title" copies title and year to a whole
    season. Untick a row to leave that file alone.
-6. Subtitles (`.srt`, `.ass`, `.sub`/`.idx`, `.vtt`, …) next to a video or in
+6. Subtitles (`.srt`, `.ass`, `.sub`/`.idx`, `.vtt`, ...) next to a video or in
    a `Subs` folder are renamed with their video, keeping language tags such
    as `.en`, `.forced` or `.sdh`. Sample clips are skipped. Extras
-   (trailers, featurettes, deleted scenes, …) go into the Plex extras
-   folders (`Trailers`, `Featurettes`, …).
-7. Click **✔ Apply** and confirm. Existing files are never overwritten (a
-   taken name gets ` (1)`), and **↩ Undo last run** moves everything back.
+   (trailers, featurettes, deleted scenes, ...) go into the Plex extras
+   folders (`Trailers`, `Featurettes`, ...).
+7. Click **Apply** and confirm. Existing files are never overwritten (a
+   taken name gets ` (1)`), and **Undo last run** moves everything back.
    Old, now empty folders are left in place (nothing is ever deleted).
 
 Optional: turn on the **TMDB lookup** (see the next sections) and click
-**🔎 Look up on TMDB** in the right-hand panel to confirm a title against
+**Look up on TMDB** in the right-hand panel to confirm a title against
 The Movie Database. You always choose the match yourself.
 
 ## File types and protection
@@ -70,18 +70,18 @@ The Movie Database. You always choose the match yourself.
 - **Always protected, in every mode:** programs, libraries, drivers,
   installers, scripts and shortcuts (`exe dll sys msi bat cmd ps1 vbs js
   lnk url reg inf ini` and similar), system files (`desktop.ini`,
-  `thumbs.db`, `pagefile.sys`, …), Organimizer's own settings and undo logs,
+  `thumbs.db`, `pagefile.sys`, ...), Organimizer's own settings and undo logs,
   hidden or system files, and folders such as `.git`, `$Recycle.Bin` and
   `System Volume Information`. Such files are never renamed or moved, and a
   rule can never change a file's extension to another type.
 
 ## Folder blacklist
 
-**Tools > Folder Blacklist…** lists folders that can never be chosen and
+**Tools > Folder Blacklist...** lists folders that can never be chosen and
 are skipped when subfolders are scanned (both tabs). The built-in list is
 worked out from this PC's Windows folders (Windows, Program Files,
 ProgramData, the AppData folders, Recovery, `$Recycle.Bin`, drive roots
-such as `C:\` …). Add, edit or remove entries, test a folder, or click
+such as `C:\` ...). Add, edit or remove entries, test a folder, or click
 **Reset to defaults**. Matching ignores letter case and works on whole
 folder names: `C:\Windows` blocks `C:\Windows\Temp` but not
 `C:\WindowsStuff`. `*` stands for one folder name
@@ -90,10 +90,10 @@ Choosing a blocked folder shows "Folder not allowed" and selects nothing.
 
 ## Favorites
 
-- Click the **☆** next to a folder field to add it to Favorites; it turns
-  into a filled **★**. Click again to remove it.
+- Click the star (outline) next to a folder field to add it to Favorites; it turns
+  into a filled amber star. Click again to remove it.
 - The **Favorites** menu jumps to a favorite (in the tab you are on).
-- **Favorites > Manage Favorites…** (also in Tools): rename, change the
+- **Favorites > Manage Favorites...** (also in Tools): rename, change the
   folder, add, remove and reorder (Up / Down). Changes are saved at once.
 
 ## Getting a TMDB API key
@@ -118,7 +118,7 @@ personal, non-commercial use and takes a few minutes:
    `https://www.themoviedb.org` if you have none), and your contact
    details. Submit it; the key is normally shown right away.
 6. **Copy the key.** The API page now shows two values. Copy the long
-   **API Read Access Token** (starts with `eyJ…`). The shorter **API Key**
+   **API Read Access Token** (starts with `eyJ...`). The shorter **API Key**
    (32 letters and digits, "v3 auth") works too.
 7. In Organimizer open **Tools > Options**, find **TMDB lookup**, tick
    **Look up movie and TV titles on TMDB**, **paste the key** into
@@ -157,7 +157,7 @@ Good to know:
   `%APPDATA%\PrimeCrew Software\PhotoSorter\PhotoSorter.ini`) into the new
   `Organimizer.ini`. The old file is left exactly as it is.
 - Setup recognizes an installed PhotoSorter: it shows "Updating existing
-  installation: PhotoSorter v2.0.5 → PrimeCrew Organimizer v3.0.0",
+  installation: PhotoSorter v2.0.5 -> PrimeCrew Organimizer v3.0.0",
   installs Organimizer next to it, then removes the old PhotoSorter program,
   its Start Menu shortcut and its Add/Remove Programs entry. Your files,
   settings and undo logs are kept.
@@ -166,7 +166,7 @@ Good to know:
 ## Safety
 
 - Only the file types you choose are touched, and protected files never.
-- Nothing is overwritten or deleted. Name clashes get ` (1)`, ` (2)`, …
+- Nothing is overwritten or deleted. Name clashes get ` (1)`, ` (2)`, ...
 - The preview always comes first, and every Apply can be undone.
 
 ## Troubleshooting
@@ -187,7 +187,7 @@ Good to know:
 | Key    | Action        |
 |--------|---------------|
 | Ctrl+N | New Project   |
-| Ctrl+O | Open Folder…  |
+| Ctrl+O | Open Folder...  |
 | F1     | This help     |
 
 ## About and license
