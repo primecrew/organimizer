@@ -1,4 +1,4 @@
-//! egui front-end. All real work happens in the `photo_sorter` library on a
+//! egui front-end. All real work happens in the `organimizer` library on a
 //! background thread; this module only draws state and forwards actions.
 //!
 //! Layout: one window, top to bottom in the order the pipeline runs:
@@ -9,8 +9,15 @@
 //! Tools > Options window; the main window only shows a one-line summary.
 //!
 //! Menu bar: File (New Project, Open Folder, Undo Last Run, Exit),
-//! Presets (Load, Save current, Manage Presets), Tools (Options, open the
-//! settings / undo-log folder), Help (HELP.md / README, About).
+//! Presets (Load, Save current, Manage Presets), Favorites, Tools (Options,
+//! Folder Blacklist, open the settings / undo-log folder), Help.
+//!
+//! 3.0: two top-level tabs, Organize (the 2.x pipeline) and Plex Media
+//! (see `gui_v3.rs`).
+
+#[path = "gui_v3.rs"]
+mod v3;
+use v3::Mode;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -25,20 +32,21 @@ use eframe::egui::{
 };
 use egui_extras::{Column, TableBuilder};
 
-use photo_sorter::date_source::{DateMode, Fallback, SourceKind};
-use photo_sorter::filename_date::DateOrder;
-use photo_sorter::ops::{self, RunReport, UndoReport};
-use photo_sorter::plan::{self, Plan, PlanOptions, Status};
-use photo_sorter::rename::{
+use organimizer::date_source::{DateMode, Fallback, SourceKind};
+use organimizer::filename_date::DateOrder;
+use organimizer::ops::{self, RunReport, UndoReport};
+use organimizer::plan::{self, Plan, PlanOptions, Status};
+use organimizer::rename::{
     self, AddTextRule, CaseMode, CleanRule, DateRule, DeleteFrom, DeleteRule, DeleteUntil, ExtCase, ExtensionRule,
     NumberSystem, NumberingRule, Occurrence, PaddingRule, ParentRule, Position, RULE_TYPES, RandomizeRule,
     RearrangeRule, ReformatDateRule, RemoveMode, ReplaceRule, RuleKind, RuleSpec, StripRule,
 };
-use photo_sorter::scan;
-use photo_sorter::settings::{self, Loaded, PresetScope, Settings, Theme};
-use photo_sorter::template::{self as tpl, FolderBuilder, MonthStyle, PartOrder, Separator, YearStyle};
-use photo_sorter::window_state::{self, WindowLayout};
-use photo_sorter::{about, desktop, session};
+use organimizer::filetypes::{Filter, TypeGroup};
+use organimizer::scan;
+use organimizer::settings::{self, Loaded, PresetScope, Settings, Theme};
+use organimizer::template::{self as tpl, FolderBuilder, MonthStyle, PartOrder, Separator, YearStyle};
+use organimizer::window_state::{self, WindowLayout};
+use organimizer::{about, desktop, session};
 
 // ---------------------------------------------------------------------------
 // Background work
@@ -188,11 +196,16 @@ enum Confirm {
 }
 
 /// Unsaved edits in the Tools > Options window. Applied to the settings (and
-/// written to PhotoSorter.ini) only on Save; Close discards them.
+/// written to Organimizer.ini) only on Save; Close discards them.
 #[derive(Clone, PartialEq)]
 struct OptionsDraft {
     extensions: String,
     order_ui: Vec<(SourceKind, bool)>,
+    custom_extensions: String,
+    tmdb_enabled: bool,
+    tmdb_key: String,
+    tmdb_language: String,
+    show_key: bool,
 }
 
 /// Small modal dialogs of the menu bar.
@@ -296,6 +309,13 @@ pub struct App {
     icon_tex: egui::TextureHandle,
     /// Automatic height of the steps 1–3 panel, decided on the first frame.
     setup_default_h: Option<f32>,
+    /// 3.0: Organize or Plex Media tab.
+    mode: Mode,
+    plex: v3::PlexState,
+    blacklist_editor: Option<v3::BlacklistDraft>,
+    favorites_editor: Option<v3::FavoritesDraft>,
+    /// TMDB logo for About (approved TMDB artwork, assets/tmdb).
+    tmdb_tex: egui::TextureHandle,
 }
 
 impl App {
@@ -366,6 +386,11 @@ impl App {
             applied_font: 0.0,
             icon_tex: cc.egui_ctx.load_texture("app-icon", icon_image(), egui::TextureOptions::LINEAR),
             setup_default_h: None,
+            mode: if s.mode == "plex" { Mode::Plex } else { Mode::Organize },
+            plex: v3::PlexState::default(),
+            blacklist_editor: None,
+            favorites_editor: None,
+            tmdb_tex: cc.egui_ctx.load_texture("tmdb-logo", tmdb_image(), egui::TextureOptions::LINEAR),
             s,
         };
         app.saved_snapshot = app.layout_snapshot();
@@ -385,7 +410,15 @@ impl App {
     }
 
     fn scan_signature(&self) -> String {
-        format!("{:?}|{}|{}", self.s.folder_trimmed(), self.s.include_subfolders, self.s.extensions)
+        format!(
+            "{:?}|{}|{}|{}|{}|{:?}",
+            self.s.folder_trimmed(),
+            self.s.include_subfolders,
+            self.s.extensions,
+            self.s.file_types.key(),
+            self.s.custom_extensions,
+            self.s.blacklist.entries
+        )
     }
 
     /// Everything that influences the plan. If it changes, the preview is stale.
@@ -473,13 +506,13 @@ impl App {
     fn reset_layout(&mut self, ctx: &egui::Context) {
         self.s.layout = WindowLayout::default();
         let [w, h] = window_state::DEFAULT_SIZE;
-        let p = window_state::restore_placement(None, [w, h], false, &photo_sorter::desktop::monitor_work_areas());
+        let p = window_state::restore_placement(None, [w, h], false, &organimizer::desktop::monitor_work_areas());
         (self.s.window_width, self.s.window_height) = (p.size[0], p.size[1]);
         self.layout_gen += 1;
         self.setup_default_h = None;
         ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(Vec2::new(p.size[0], p.size[1])));
-        if let Some(m) = photo_sorter::desktop::monitor_work_areas().first() {
+        if let Some(m) = organimizer::desktop::monitor_work_areas().first() {
             let x = m.x + ((m.w - p.size[0] - 16.0) / 2.0).max(0.0);
             let y = m.y + ((m.h - p.size[1] - 60.0) / 2.0).max(0.0);
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
@@ -516,6 +549,9 @@ impl App {
 
     fn set_folder(&mut self, p: &Path) {
         let dir = if p.is_dir() { p.to_path_buf() } else { p.parent().map(Path::to_path_buf).unwrap_or_default() };
+        if self.reject_if_blocked(&dir) {
+            return;
+        }
         self.s.last_folder = dir.to_string_lossy().into_owned();
         self.status = format!("Selected {}", dir.display());
         // Browse / drop: fold step 1 to its one-line summary (folder shown
@@ -564,7 +600,11 @@ impl App {
             return;
         }
         let root = self.root();
-        if self.s.folder_trimmed().is_empty() || !root.is_dir() || !self.rule_errors.is_empty() {
+        if self.s.folder_trimmed().is_empty()
+            || !root.is_dir()
+            || !self.rule_errors.is_empty()
+            || self.blocked_reason(&root).is_some()
+        {
             return;
         }
         let Some(t) = self.changed_at else { return };
@@ -592,7 +632,13 @@ impl App {
             self.status = "Please choose an existing folder first.".into();
             return;
         }
-        let exts = scan::parse_extensions(&self.s.extensions);
+        if let Some(r) = self.blocked_reason(&root) {
+            self.status = r;
+            return;
+        }
+        let filter = self.file_filter();
+        let blacklist = self.s.blacklist.clone();
+        let exts = filter.rename_exts();
         let stages = match plan::stages_with_rules(&self.s.rules, &exts) {
             Ok(s) => s,
             Err(e) => {
@@ -612,7 +658,7 @@ impl App {
                 Some(c) => c,
                 None => {
                     let mut t = Ticker::new();
-                    let res = scan::scan(&root, recursive, &exts, &cancel, &mut |n, dir| {
+                    let res = scan::scan_filtered(&root, recursive, &filter, &blacklist, &cancel, &mut |n, dir| {
                         if t.due() {
                             let _ = tx.send(Msg::Progress {
                                 text: format!("Scanning… {n} files found — {}", dir.display()),
@@ -624,7 +670,11 @@ impl App {
                     ScanCache {
                         sig: if cancel.load(Ordering::Relaxed) { String::new() } else { scan_sig },
                         files: Arc::new(res.files),
-                        errors: res.errors,
+                        errors: res
+                            .errors
+                            .into_iter()
+                            .chain(res.skipped_dirs.into_iter().map(|d| (d, "Blacklisted folder: skipped".to_string())))
+                            .collect(),
                         dirs: res.dirs_scanned,
                     }
                 }
@@ -951,6 +1001,13 @@ const ICON_RGBA: &[u8] = include_bytes!("../assets/icon64.rgba");
 /// Window icon (same artwork as the embedded .ico), 64x64 raw RGBA.
 pub fn app_icon() -> egui::IconData {
     egui::IconData { rgba: ICON_RGBA.to_vec(), width: 64, height: 64 }
+}
+
+const TMDB_RGBA: &[u8] = include_bytes!("../assets/tmdb/tmdb_logo.rgba");
+
+/// TMDB's approved "primary short" logo (blue), 247x32, for Help > About.
+fn tmdb_image() -> egui::ColorImage {
+    egui::ColorImage::from_rgba_unmultiplied([247, 32], TMDB_RGBA)
 }
 
 /// The same 64x64 icon as an image for the header and Help > About.
@@ -1487,8 +1544,11 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
         self.apply_style(&ctx);
         self.poll_worker();
-        self.drive_live_preview(&ctx);
-        if self.busy() {
+        self.plex_poll();
+        if self.mode == Mode::Organize {
+            self.drive_live_preview(&ctx);
+        }
+        if self.busy() || self.plex.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
@@ -1498,25 +1558,34 @@ impl eframe::App for App {
         // drag & drop a folder (or a file inside it)
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         if let Some(p) = dropped.first()
-            && !matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo))
+            && !self.locked()
         {
-            self.set_folder(p);
+            match self.mode {
+                Mode::Organize => self.set_folder(p),
+                Mode::Plex => self.plex_set_source(p),
+            }
         }
         let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
 
         self.shortcuts(&ctx);
         self.menu_bar(ui);
         self.top_bar(ui);
+        self.mode_bar(ui);
         self.status_bar(ui);
-        self.action_bar(ui, &ctx);
-        self.setup_panel(ui);
-        egui::CentralPanel::default_margins().show(ui, |ui| self.central(ui));
+        match self.mode {
+            Mode::Organize => {
+                self.action_bar(ui, &ctx);
+                self.setup_panel(ui);
+                egui::CentralPanel::default_margins().show(ui, |ui| self.central(ui));
+            }
+            Mode::Plex => self.plex_ui(ui, &ctx),
+        }
 
         if hovering {
             let rect = ctx.content_rect();
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
-                egui::Id::unique("photosorter-drop-overlay"),
+                egui::Id::unique("organimizer-drop-overlay"),
             ));
             painter.rect_filled(rect, 0.0, Color32::from_black_alpha(160));
             painter.text(
@@ -1529,6 +1598,9 @@ impl eframe::App for App {
         }
 
         self.confirm_dialogs(&ctx);
+        self.plex_dialogs(&ctx);
+        self.blacklist_window(&ctx);
+        self.favorites_window(&ctx);
         self.options_window(&ctx);
         self.manage_presets_window(&ctx);
         self.dialogs(&ctx);
@@ -1587,11 +1659,19 @@ fn step_section(
 
 impl App {
     fn open_options(&mut self) {
-        self.options = Some(OptionsDraft { extensions: self.s.extensions.clone(), order_ui: self.order_ui.clone() });
+        self.options = Some(OptionsDraft {
+            extensions: self.s.extensions.clone(),
+            order_ui: self.order_ui.clone(),
+            custom_extensions: self.s.custom_extensions.clone(),
+            tmdb_enabled: self.s.plex.tmdb_enabled,
+            tmdb_key: self.s.plex.tmdb_key.clone(),
+            tmdb_language: self.s.plex.tmdb_language.clone(),
+            show_key: false,
+        });
     }
 
     fn locked(&self) -> bool {
-        matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo))
+        matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo)) || self.plex.moving()
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -1646,7 +1726,7 @@ impl App {
                     if ui
                         .add_enabled(!locked && log.is_some(), egui::Button::new("Undo Last Run…"))
                         .on_hover_text("Restore the original names and folders of the last Apply (asks first)")
-                        .on_disabled_hover_text("No undo log (PhotoSorter-undo-*.json) in the chosen folder")
+                        .on_disabled_hover_text("No undo log (Organimizer-undo-*.json) in the chosen folder")
                         .clicked()
                         && let Some(p) = log
                     {
@@ -1696,10 +1776,23 @@ impl App {
                         }
                     });
                 });
+                self.favorites_menu(ui);
                 ui.menu_button("Tools", |ui| {
                     if ui.button("Options…").on_hover_text("File types and date-detection priority").clicked() {
                         self.open_options();
                         ui.close();
+                    }
+                    if ui
+                        .button("Folder Blacklist…")
+                        .on_hover_text("System folders that can never be chosen or scanned; add your own")
+                        .clicked()
+                    {
+                        ui.close();
+                        self.open_blacklist_editor();
+                    }
+                    if ui.button("Manage Favorites…").clicked() {
+                        ui.close();
+                        self.open_favorites_editor();
                     }
                     ui.separator();
                     let settings_dir = self.ini_path.as_ref().and_then(|p| p.parent().map(Path::to_path_buf));
@@ -1735,7 +1828,7 @@ impl App {
                         ui.close();
                         self.open_help();
                     }
-                    if ui.button("About PhotoSorter…").on_hover_text("Version, publisher and build notes").clicked() {
+                    if ui.button("About PrimeCrew Organimizer…").on_hover_text("Version, publisher and build notes").clicked() {
                         ui.close();
                         self.dialog = Some(Dialog::About);
                     }
@@ -1886,7 +1979,7 @@ impl App {
                         ui.label(RichText::new(format!("v{}", about::VERSION)).weak().small());
                     });
                     ui.label(
-                        RichText::new("Rename & sort photos and videos — ReNamer-style rules, then date folders")
+                        RichText::new("Rename & sort files into date folders · organize movies and TV shows for Plex")
                             .weak(),
                     );
                 });
@@ -1916,18 +2009,41 @@ impl App {
     fn status_bar(&mut self, ui: &mut egui::Ui) {
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.add_space(3.0);
+            // a notice (settings imported / not saved) gets its own line so it never
+            // overlaps the status text
+            let mut dismiss = false;
+            if let Some(n) = &self.notice {
+                ui.horizontal(|ui| {
+                    if ui.small_button("OK").on_hover_text("Hide this message").clicked() {
+                        dismiss = true;
+                    }
+                    ui.add(egui::Label::new(RichText::new(format!("⚠ {n}")).color(amber())).truncate())
+                        .on_hover_text(n.as_str());
+                });
+            }
+            if dismiss {
+                self.notice = None;
+            }
             ui.horizontal(|ui| {
-                if self.busy() {
+                let plex = self.mode == Mode::Plex && self.plex.busy();
+                if plex {
+                    ui.add(egui::Spinner::new());
+                    let (t, f) = &self.plex.progress;
+                    ui.add(egui::ProgressBar::new(*f).desired_width(220.0).show_percentage().animate(true));
+                    ui.add(egui::Label::new(if t.is_empty() { self.plex.status.as_str() } else { t.as_str() }).truncate());
+                } else if self.busy() && self.mode == Mode::Organize {
                     ui.add(egui::Spinner::new());
                     ui.add(egui::ProgressBar::new(self.progress).desired_width(220.0).show_percentage().animate(true));
                     ui.add(egui::Label::new(&self.progress_text).truncate());
                 } else {
-                    ui.add(egui::Label::new(&self.status).truncate());
+                    let w = (ui.available_width() - self.s.font_size * 12.0).max(80.0);
+                    let h = ui.spacing().interact_size.y;
+                    ui.allocate_ui_with_layout(Vec2::new(w, h), Layout::left_to_right(Align::Center), |ui| {
+                        ui.add(egui::Label::new(&self.status).truncate());
+                    });
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| match (&self.notice, &self.ini_path) {
-                    (Some(n), _) => {
-                        ui.label(RichText::new(format!("⚠ {n}")).color(amber()));
-                    }
+                    (Some(_), _) => {}
                     (None, Some(p)) => {
                         ui.label(RichText::new(format!("Settings: {}", settings::INI_NAME)).weak())
                             .on_hover_text(p.display().to_string());
@@ -1993,7 +2109,7 @@ impl App {
                 let r = ui.add_enabled(log.is_some(), undo_btn);
                 let r = match &log {
                     Some(p) => r.on_hover_text(format!("Restores original names and folders using {}", p.display())),
-                    None => r.on_disabled_hover_text("No undo log (PhotoSorter-undo-*.json) in this folder"),
+                    None => r.on_disabled_hover_text("No undo log (Organimizer-undo-*.json) in this folder"),
                 };
                 if r.clicked()
                     && let Some(p) = log
@@ -2063,6 +2179,43 @@ impl App {
         }
     }
 
+    /// What the Organize tab scans (file type picker + lists).
+    fn file_filter(&self) -> Filter {
+        Filter::for_group(self.s.file_types, &self.s.extensions, &self.s.custom_extensions)
+    }
+
+    /// Top-level tabs: Organize | Plex Media.
+    fn mode_bar(&mut self, ui: &mut egui::Ui) {
+        let locked = self.locked();
+        egui::Panel::top("mode").show(ui, |ui| {
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                let fs = self.s.font_size;
+                for (m, label, tip) in [
+                    (Mode::Organize, "Organize", "Rename files with rules and sort them into date folders"),
+                    (Mode::Plex, "Plex Media", "Analyze movies and TV episodes and move them into the layout Plex expects"),
+                ] {
+                    let sel = self.mode == m;
+                    let text = RichText::new(label).size(fs * 1.1).strong();
+                    let text = if sel { text.color(accent(ui)) } else { text };
+                    let r = ui.add_enabled(!locked || sel, egui::Button::selectable(sel, text)).on_hover_text(tip);
+                    if r.clicked() && !sel {
+                        self.mode = m;
+                        self.s.mode = if m == Mode::Plex { "plex".into() } else { "organize".into() };
+                        self.status = match m {
+                            Mode::Plex if self.plex.status.is_empty() => {
+                                "Plex Media: choose the folder with your movies / TV episodes and click Scan.".into()
+                            }
+                            Mode::Plex => self.plex.status.clone(),
+                            Mode::Organize => "Organize: the preview updates live; nothing changes until you click Apply.".into(),
+                        };
+                    }
+                }
+            });
+            ui.add_space(2.0);
+        });
+    }
+
     fn source_section(&mut self, ui: &mut egui::Ui) {
         let summary = if self.s.folder_trimmed().is_empty() {
             "no folder chosen".to_string()
@@ -2075,15 +2228,22 @@ impl App {
                 if ui.button("📂 Browse…").on_hover_text("File > Open Folder… (Ctrl+O)").clicked() {
                     self.browse_folder();
                 }
+                let star_w = self.s.font_size * 2.2;
                 ui.add(
                     egui::TextEdit::singleline(&mut self.s.last_folder)
                         .hint_text("…or drop a folder here")
-                        .desired_width(f32::INFINITY),
+                        .desired_width((ui.available_width() - star_w).max(80.0)),
                 )
                 .on_hover_text("Folder to rename / sort; type or paste a path, or drag a folder onto the window");
+                let cur = self.s.last_folder.clone();
+                self.star_button(ui, &cur);
             });
-            if !self.s.folder_trimmed().is_empty() && !self.root().is_dir() {
-                ui.label(RichText::new("Folder does not exist").color(red()).small());
+            if !self.s.folder_trimmed().is_empty() {
+                if let Some(r) = self.blocked_reason(&self.root()) {
+                    ui.label(RichText::new(r).color(red()).small());
+                } else if !self.root().is_dir() {
+                    ui.label(RichText::new("Folder does not exist").color(red()).small());
+                }
             }
             ui.horizontal(|ui| {
                 ui.checkbox(&mut self.s.include_subfolders, "Include subfolders").on_hover_text(
@@ -2091,13 +2251,33 @@ impl App {
                      each folder containing photos/videos gets its own Month YYYY subfolders.",
                 );
                 ui.separator();
-                let summary = scan::extension_summary(&self.s.extensions);
-                let warn = !scan::rejected_extensions(&self.s.extensions).is_empty();
-                let text = RichText::new(format!("File types: {summary} (change in Tools > Options)")).weak();
+                ui.label("File types");
+                egui::ComboBox::from_id_salt("file-types")
+                    .selected_text(self.s.file_types.label())
+                    .width(self.s.font_size * 11.0)
+                    .height(self.s.font_size * 24.0)
+                    .show_ui(ui, |ui| {
+                        for g in TypeGroup::ALL {
+                            ui.selectable_value(&mut self.s.file_types, g, g.label()).on_hover_text(g.hint());
+                        }
+                    })
+                    .response
+                    .on_hover_text(self.s.file_types.hint());
+                let filter = self.file_filter();
+                let summary = filter.summary(self.s.file_types);
+                let warn = match self.s.file_types {
+                    TypeGroup::Media => !scan::rejected_extensions(&self.s.extensions).is_empty(),
+                    TypeGroup::Custom => filter.rename_exts().is_empty(),
+                    _ => false,
+                };
+                let text = RichText::new(summary).weak();
                 let text = if warn { text.color(amber()) } else { text };
-                ui.add(egui::Label::new(text).truncate())
-                    .on_hover_text(scan::parse_extensions(&self.s.extensions).join(", "));
-                if ui.small_button("Options…").on_hover_text("Edit the file types (Tools > Options)").clicked() {
+                let tip = match &filter {
+                    Filter::All => "Every file with an extension, except programs, scripts, shortcuts and system files (always protected)".to_string(),
+                    Filter::Exts(v) => v.join(", "),
+                };
+                ui.add(egui::Label::new(text).truncate()).on_hover_text(tip);
+                if ui.small_button("Options…").on_hover_text("Edit the photo/video and custom lists (Tools > Options)").clicked() {
                     self.open_options();
                 }
             });
@@ -2297,7 +2477,7 @@ impl App {
             }
             if ui
                 .add_enabled(exists, egui::Button::new("Delete"))
-                .on_hover_text("Delete this preset from PhotoSorter.ini (asks first; no photos or videos are touched)")
+                .on_hover_text("Delete this preset from Organimizer.ini (asks first; no photos or videos are touched)")
                 .clicked()
             {
                 self.dialog = Some(Dialog::DeletePreset(self.preset_sel.clone()));
@@ -2311,7 +2491,7 @@ impl App {
             let name = settings::clean_preset_name(&self.preset_name);
             if ui
                 .add_enabled(!name.is_empty(), egui::Button::new("💾 Save as preset"))
-                .on_hover_text("Saves the rules and the options of steps 1 and 3 into PhotoSorter.ini")
+                .on_hover_text("Saves the rules and the options of steps 1 and 3 into Organimizer.ini")
                 .clicked()
                 && self.s.save_preset(&name)
             {
@@ -2972,7 +3152,7 @@ impl App {
         let Some(c) = &self.confirm else { return };
         let mut close = false;
         let mut go = false;
-        let modal = egui::Modal::new(egui::Id::unique("photosorter-confirm")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("organimizer-confirm")).show(ctx, |ui| {
             ui.set_width(480.0);
             match c {
                 Confirm::Apply => {
@@ -3039,114 +3219,201 @@ impl App {
 }
 
 impl App {
-    /// Tools > Options: grouped sections, Save (apply + write PhotoSorter.ini)
+    /// Tools > Options: grouped sections, Save (apply + write Organimizer.ini)
     /// or Close (discard). Modal, so the main window cannot change underneath.
     fn options_window(&mut self, ctx: &egui::Context) {
         let Some(mut draft) = self.options.take() else { return };
         let locked = matches!(self.busy_kind(), Some(JobKind::Apply | JobKind::Undo));
-        let current = OptionsDraft { extensions: self.s.extensions.clone(), order_ui: self.order_ui.clone() };
+        let current = OptionsDraft {
+            extensions: self.s.extensions.clone(),
+            order_ui: self.order_ui.clone(),
+            custom_extensions: self.s.custom_extensions.clone(),
+            tmdb_enabled: self.s.plex.tmdb_enabled,
+            tmdb_key: self.s.plex.tmdb_key.clone(),
+            tmdb_language: self.s.plex.tmdb_language.clone(),
+            show_key: draft.show_key,
+        };
+        let mut open_help = false;
+        let mut open_url: Option<&'static str> = None;
         let mut save = false;
         let mut close = false;
         let mut reset_layout = false;
         let mut theme = self.s.theme;
         let mut font_size = self.s.font_size;
         let fs = self.s.font_size;
-        let modal = egui::Modal::new(egui::Id::unique("photosorter-options")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("organimizer-options")).show(ctx, |ui| {
             ui.set_width((fs * 40.0).min(ctx.content_rect().width() - 60.0));
             ui.heading("Options");
             ui.add_space(6.0);
+            let max_h = (ctx.content_rect().height() - fs * 9.0).max(fs * 10.0);
+            egui::ScrollArea::vertical().max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
 
-            options_group(ui, "Appearance", |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Theme");
-                    for t in Theme::ALL {
-                        ui.radio_value(&mut theme, t, t.label()).on_hover_text(match t {
-                            Theme::System => "Use the Windows light/dark app color setting",
-                            _ => "",
-                        });
-                    }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Text size");
-                    ui.add(egui::Slider::new(&mut font_size, 10.0..=28.0).step_by(1.0).suffix(" pt"));
-                });
-                ui.horizontal(|ui| {
-                    if ui
-                        .button("Reset window layout")
-                        .on_hover_text(
-                            "Default window size, centered, not maximized; default panel height, column widths \
-                             and expanded sections",
-                        )
-                        .clicked()
-                    {
-                        reset_layout = true;
-                    }
-                    ui.label(
-                        RichText::new("Appearance applies at once and is saved automatically.").weak().small(),
-                    );
-                });
-            });
-            ui.add_space(6.0);
-
-            options_group(ui, "File types", |ui| {
-                ui.label(
-                    "Extensions to process, separated by commas (case-insensitive). Only image, camera RAW and \
-                     video types are accepted; anything else is ignored and never touched.",
-                );
-                ui.add(
-                    egui::TextEdit::multiline(&mut draft.extensions)
-                        .desired_rows(3)
-                        .desired_width(f32::INFINITY)
-                        .hint_text("e.g. jpg, png, heic, mp4"),
-                );
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(draft.extensions != scan::DEFAULT_EXTENSIONS, egui::Button::new("Reset to defaults"))
-                        .on_hover_text(scan::DEFAULT_EXTENSIONS)
-                        .clicked()
-                    {
-                        draft.extensions = scan::DEFAULT_EXTENSIONS.to_string();
-                    }
-                    ui.label(RichText::new(format!("Uses: {}", scan::extension_summary(&draft.extensions))).weak());
-                });
-                let rejected = scan::rejected_extensions(&draft.extensions);
-                if !rejected.is_empty() {
-                    ui.label(
-                        RichText::new(format!("Ignored (not image/video, never touched): {}", rejected.join(", ")))
-                            .color(amber())
-                            .small(),
-                    );
-                }
-            });
-            ui.add_space(6.0);
-
-            options_group(ui, "Date detection", |ui| {
-                ui.label("Auto priority — used when Date source is “Auto”, and by the “Insert date” rule. First match wins; untick to skip a source.");
-                let n = draft.order_ui.len();
-                let enabled_count = draft.order_ui.iter().filter(|(_, on)| *on).count();
-                let mut swap: Option<(usize, usize)> = None;
-                for i in 0..n {
-                    let (kind, on) = draft.order_ui[i];
+                options_group(ui, "Appearance", |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{}.", i + 1)).weak());
-                        if ui.add_enabled(i > 0, egui::Button::new("⏶").small()).on_hover_text("Earlier").clicked() {
-                            swap = Some((i, i - 1));
-                        }
-                        if ui.add_enabled(i + 1 < n, egui::Button::new("⏷").small()).on_hover_text("Later").clicked() {
-                            swap = Some((i, i + 1));
-                        }
-                        let mut on2 = on;
-                        let can_toggle = !(on && enabled_count == 1);
-                        if ui.add_enabled(can_toggle, egui::Checkbox::new(&mut on2, kind_desc(kind))).changed() {
-                            draft.order_ui[i].1 = on2;
+                        ui.label("Theme");
+                        for t in Theme::ALL {
+                            ui.radio_value(&mut theme, t, t.label()).on_hover_text(match t {
+                                Theme::System => "Use the Windows light/dark app color setting",
+                                _ => "",
+                            });
                         }
                     });
-                }
-                if let Some((a, b)) = swap {
-                    draft.order_ui.swap(a, b);
-                }
-            });
+                    ui.horizontal(|ui| {
+                        ui.label("Text size");
+                        ui.add(egui::Slider::new(&mut font_size, 10.0..=28.0).step_by(1.0).suffix(" pt"));
+                    });
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button("Reset window layout")
+                            .on_hover_text(
+                                "Default window size, centered, not maximized; default panel height, column widths \
+                                 and expanded sections",
+                            )
+                            .clicked()
+                        {
+                            reset_layout = true;
+                        }
+                        ui.label(
+                            RichText::new("Appearance applies at once and is saved automatically.").weak().small(),
+                        );
+                    });
+                });
+                ui.add_space(6.0);
 
+                options_group(ui, "File types", |ui| {
+                    ui.label(
+                        "“Images & videos” list (the default file type in the main window), separated by commas \
+                         (case-insensitive). Only image, camera RAW and video types are accepted here.",
+                    );
+                    ui.add(
+                        egui::TextEdit::multiline(&mut draft.extensions)
+                            .desired_rows(3)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("e.g. jpg, png, heic, mp4"),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(draft.extensions != scan::DEFAULT_EXTENSIONS, egui::Button::new("Reset to defaults"))
+                            .on_hover_text(scan::DEFAULT_EXTENSIONS)
+                            .clicked()
+                        {
+                            draft.extensions = scan::DEFAULT_EXTENSIONS.to_string();
+                        }
+                        ui.label(RichText::new(format!("Uses: {}", scan::extension_summary(&draft.extensions))).weak());
+                    });
+                    let rejected = scan::rejected_extensions(&draft.extensions);
+                    if !rejected.is_empty() {
+                        ui.label(
+                            RichText::new(format!("Ignored (not image/video, never touched): {}", rejected.join(", ")))
+                                .color(amber())
+                                .small(),
+                        );
+                    }
+                });
+                ui.add_space(6.0);
+
+                options_group(ui, "Custom file types", |ui| {
+                    ui.label(
+                        "Extensions for the “Custom list” file type, e.g. pdf, docx, mp3. Programs, scripts, \
+                         shortcuts and system files (exe, dll, bat, lnk, ini, sys …) are never accepted.",
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut draft.custom_extensions)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("e.g. pdf, docx, mp3"),
+                    );
+                    let (ok, rejected) = organimizer::filetypes::parse_custom(&draft.custom_extensions);
+                    ui.label(RichText::new(format!("Uses: {}", if ok.is_empty() { "nothing yet".to_string() } else { ok.join(", ") })).weak().small());
+                    if !rejected.is_empty() {
+                        ui.label(
+                            RichText::new(format!("Ignored (protected, never touched): {}", rejected.join(", ")))
+                                .color(amber())
+                                .small(),
+                        );
+                    }
+                });
+                ui.add_space(6.0);
+
+                options_group(ui, "TMDB lookup (Plex Media tab, optional)", |ui| {
+                    ui.checkbox(&mut draft.tmdb_enabled, "Look up movie and TV titles on TMDB (needs internet)")
+                        .on_hover_text("Off: everything is worked out offline from file and folder names");
+                    ui.horizontal(|ui| {
+                        ui.label("Your TMDB key");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut draft.tmdb_key)
+                                .password(!draft.show_key)
+                                .desired_width(fs * 22.0)
+                                .hint_text("API Read Access Token or API key"),
+                        );
+                        ui.checkbox(&mut draft.show_key, "Show");
+                    });
+                    let key = draft.tmdb_key.trim();
+                    if !key.is_empty() {
+                        match organimizer::tmdb::Auth::from_key(key) {
+                            Some(a) => ui.label(RichText::new(format!("Looks like a TMDB {}.", a.kind_label())).color(green()).small()),
+                            None => ui.label(
+                                RichText::new("This does not look like a TMDB API Read Access Token or v3 API key.").color(red()).small(),
+                            ),
+                        };
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Language");
+                        ui.add(egui::TextEdit::singleline(&mut draft.tmdb_language).desired_width(fs * 5.0).hint_text("en-US"))
+                            .on_hover_text("Language of the titles, e.g. en-US, de-DE, fr-FR");
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("No key yet? It is free:").small());
+                        if ui
+                            .link(RichText::new("How to get a TMDB API key (Help, F1)").small())
+                            .on_hover_text("Opens HELP.md - section “Getting a TMDB API key”, step by step")
+                            .clicked()
+                        {
+                            open_help = true;
+                        }
+                        ui.label(RichText::new("·").small());
+                        if ui.link(RichText::new("TMDB API settings page").small()).on_hover_text(organimizer::tmdb::API_SETTINGS_URL).clicked() {
+                            open_url = Some(organimizer::tmdb::API_SETTINGS_URL);
+                        }
+                    });
+                    ui.label(
+                        RichText::new(
+                            "The key is stored only in Organimizer.ini on this PC and sent only to TMDB (api.themoviedb.org). \
+                             Lookups are optional; you confirm every match.",
+                        )
+                        .weak()
+                        .small(),
+                    );
+                });
+                ui.add_space(6.0);
+
+                options_group(ui, "Date detection", |ui| {
+                    ui.label("Auto priority — used when Date source is “Auto”, and by the “Insert date” rule. First match wins; untick to skip a source.");
+                    let n = draft.order_ui.len();
+                    let enabled_count = draft.order_ui.iter().filter(|(_, on)| *on).count();
+                    let mut swap: Option<(usize, usize)> = None;
+                    for i in 0..n {
+                        let (kind, on) = draft.order_ui[i];
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("{}.", i + 1)).weak());
+                            if ui.add_enabled(i > 0, egui::Button::new("⏶").small()).on_hover_text("Earlier").clicked() {
+                                swap = Some((i, i - 1));
+                            }
+                            if ui.add_enabled(i + 1 < n, egui::Button::new("⏷").small()).on_hover_text("Later").clicked() {
+                                swap = Some((i, i + 1));
+                            }
+                            let mut on2 = on;
+                            let can_toggle = !(on && enabled_count == 1);
+                            if ui.add_enabled(can_toggle, egui::Checkbox::new(&mut on2, kind_desc(kind))).changed() {
+                                draft.order_ui[i].1 = on2;
+                            }
+                        });
+                    }
+                    if let Some((a, b)) = swap {
+                        draft.order_ui.swap(a, b);
+                    }
+                });
+
+            });
             ui.add_space(10.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let dirty = draft != current;
@@ -3171,7 +3438,23 @@ impl App {
         if reset_layout {
             self.reset_layout(ctx);
         }
+        if open_help {
+            self.open_help();
+        }
+        if let Some(u) = open_url
+            && let Err(e) = desktop::open_known_url(u)
+        {
+            self.status = e.to_string();
+        }
         if save {
+            self.s.custom_extensions = draft.custom_extensions.trim().to_string();
+            self.s.plex.tmdb_enabled = draft.tmdb_enabled;
+            self.s.plex.tmdb_key = draft.tmdb_key.trim().to_string();
+            self.s.plex.tmdb_language = if draft.tmdb_language.trim().is_empty() {
+                settings::DEFAULT_TMDB_LANGUAGE.to_string()
+            } else {
+                draft.tmdb_language.trim().to_string()
+            };
             self.s.extensions = draft.extensions.trim().to_string();
             self.order_ui = draft.order_ui;
             self.sync_order();
@@ -3188,7 +3471,7 @@ impl App {
 
 impl App {
     /// Presets > Manage Presets: list on the left, details + actions on the
-    /// right. Every change is written to PhotoSorter.ini at once.
+    /// right. Every change is written to Organimizer.ini at once.
     fn manage_presets_window(&mut self, ctx: &egui::Context) {
         if !self.manage_open {
             return;
@@ -3245,7 +3528,7 @@ impl App {
                 ui.separator();
                 ui.label(
                     RichText::new(
-                        "Stored as [Preset:Name] sections in PhotoSorter.ini. Every change here is saved at once; the previous file is kept as PhotoSorter.ini.bak.",
+                        "Stored as [Preset:Name] sections in Organimizer.ini. Every change here is saved at once; the previous file is kept as Organimizer.ini.bak.",
                     )
                     .weak()
                     .small(),
@@ -3363,7 +3646,7 @@ impl App {
         let Some(mut d) = self.dialog.take() else { return };
         let mut keep = true;
         let fs = self.s.font_size;
-        let modal = egui::Modal::new(egui::Id::unique("photosorter-dialog")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("organimizer-dialog")).show(ctx, |ui| {
             ui.set_width(fs * 32.0);
             match &mut d {
                 Dialog::NewProject(w) => {
@@ -3390,7 +3673,7 @@ impl App {
                 Dialog::SavePreset { name } => {
                     ui.heading("Save current as preset");
                     ui.add_space(4.0);
-                    ui.label("Saves the rename rules and the options of steps 1 and 3 into PhotoSorter.ini.");
+                    ui.label("Saves the rename rules and the options of steps 1 and 3 into Organimizer.ini.");
                     let r = ui.add(egui::TextEdit::singleline(name).hint_text("preset name").desired_width(f32::INFINITY));
                     if !r.has_focus() && name.is_empty() {
                         r.request_focus();
@@ -3428,7 +3711,7 @@ impl App {
                     ui.heading("Delete preset?");
                     ui.add_space(4.0);
                     ui.label(format!(
-                        "Delete the preset “{name}”? Its [Preset:{name}] section is removed from PhotoSorter.ini (the previous file is kept as PhotoSorter.ini.bak). No photos or videos are touched."
+                        "Delete the preset “{name}”? Its [Preset:{name}] section is removed from Organimizer.ini (the previous file is kept as Organimizer.ini.bak). No photos or videos are touched."
                     ));
                     ui.add_space(8.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -3477,7 +3760,7 @@ impl App {
                     ui.heading("Help file not found");
                     ui.add_space(4.0);
                     ui.label(format!(
-                        "{} and {} ship in the PhotoSorter zip and should sit next to PhotoSorter.exe:",
+                        "{} and {} ship in the Organimizer zip and should sit next to Organimizer.exe:",
                         desktop::HELP_NAME,
                         desktop::README_NAME
                     ));
@@ -3519,10 +3802,29 @@ impl App {
                     ui.label(RichText::new(where_).weak().small());
                     ui.add_space(4.0);
                     ui.label(
-                        RichText::new("Only image and video files are touched. Preview before Apply, Undo after; \
-                                       nothing is ever overwritten or deleted.")
-                            .weak(),
+                        RichText::new(
+                            "Only the file types you choose are touched; programs, scripts and system files never. \
+                             Preview before Apply, Undo after; nothing is ever overwritten or deleted.",
+                        )
+                        .weak(),
                     );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let r = ui.add(
+                            egui::Image::new(&self.tmdb_tex)
+                                .fit_to_exact_size(Vec2::new(fs * 6.0, fs * 6.0 * 32.0 / 247.0))
+                                .sense(egui::Sense::click()),
+                        );
+                        if r.on_hover_text(organimizer::tmdb::WEBSITE).clicked() {
+                            let _ = desktop::open_known_url(organimizer::tmdb::WEBSITE);
+                        }
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(organimizer::tmdb::ATTRIBUTION).small());
+                            if ui.link(RichText::new(organimizer::tmdb::WEBSITE).small()).clicked() {
+                                let _ = desktop::open_known_url(organimizer::tmdb::WEBSITE);
+                            }
+                        });
+                    });
                     ui.add_space(6.0);
                     ui.label(RichText::new(about::copyright()).small());
                     ui.label(RichText::new(about::LICENSE_LINE).small())

@@ -19,7 +19,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::plan::{Plan, Status, same_file, unique_dest_for};
 
-pub const UNDO_PREFIX: &str = "PhotoSorter-undo-";
+pub const UNDO_PREFIX: &str = "Organimizer-undo-";
+/// Undo logs written by PhotoSorter 2.x (still found and undone).
+pub const LEGACY_UNDO_PREFIX: &str = "PhotoSorter-undo-";
 pub const UNDO_DONE_SUFFIX: &str = ".undone.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -95,7 +97,7 @@ fn case_only_rename(from: &Path, to: &Path) -> io::Result<()> {
     let dir = from.parent().unwrap_or(Path::new("."));
     let mut n = 0u32;
     let tmp = loop {
-        let t = dir.join(format!(".photosorter-case-{}-{n}.tmp", std::process::id()));
+        let t = dir.join(format!(".organimizer-case-{}-{n}.tmp", std::process::id()));
         if !t.exists() {
             break t;
         }
@@ -167,7 +169,7 @@ pub fn execute(plan: &Plan, cancel: &AtomicBool, progress: &mut dyn FnMut(usize,
     let mut report = RunReport::default();
     let log_path = new_log_path(&plan.root);
     let mut log = UndoLog {
-        app: "PhotoSorter".into(),
+        app: "Organimizer".into(),
         version: 1,
         started: now_local().format("%Y-%m-%d %H:%M:%S").to_string(),
         root: plan.root.clone(),
@@ -273,11 +275,17 @@ pub fn find_latest_log(root: &Path) -> Option<PathBuf> {
         .map(|e| e.path())
         .filter(|p| {
             let n = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            n.starts_with(UNDO_PREFIX) && n.ends_with(".json") && !n.ends_with(UNDO_DONE_SUFFIX)
+            (n.starts_with(UNDO_PREFIX) || n.starts_with(LEGACY_UNDO_PREFIX))
+                && n.ends_with(".json")
+                && !n.ends_with(UNDO_DONE_SUFFIX)
         })
         .collect();
-    // timestamped names sort chronologically
-    logs.sort();
+    // the timestamp after the prefix sorts chronologically
+    let stamp = |p: &PathBuf| {
+        let n = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        n.trim_start_matches(UNDO_PREFIX).trim_start_matches(LEGACY_UNDO_PREFIX).to_string()
+    };
+    logs.sort_by_key(stamp);
     logs.pop()
 }
 
@@ -301,7 +309,7 @@ pub fn undo(log_path: &Path, progress: &mut dyn FnMut(usize, usize)) -> UndoRepo
     for (i, m) in log.moves.iter().enumerate().rev() {
         progress(total - i, total);
         if !m.to.is_file() {
-            report.errors.push((m.to.clone(), "File is no longer where PhotoSorter put it".into()));
+            report.errors.push((m.to.clone(), "File is no longer where Organimizer put it".into()));
             remaining.push(m.clone());
             continue;
         }

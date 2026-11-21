@@ -1,11 +1,11 @@
 //! Remembered window position / size / layout (`[Window]` in
-//! `PhotoSorter.ini`, since 2.0.3) and the safety clamp used when restoring.
+//! `Organimizer.ini`, since 2.0.3) and the safety clamp used when restoring.
 //!
 //! Everything here is plain data so it can be unit tested without a window:
 //! the GUI reads the monitor work areas (see [`crate::desktop::monitor_work_areas`]),
 //! calls [`restore_placement`] and only then creates the window.
 
-/// Smallest window (inner size, logical pixels) PhotoSorter allows.
+/// Smallest window (inner size, logical pixels) Organimizer allows.
 pub const MIN_SIZE: [f32; 2] = [760.0, 480.0];
 /// Size used the first time, after "Reset window layout", or when the saved
 /// size is unusable.

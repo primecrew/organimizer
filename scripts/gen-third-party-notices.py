@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Write THIRD-PARTY-NOTICES.txt for the Windows build of PhotoSorter.
+"""Write THIRD-PARTY-NOTICES.txt for the Windows build of PrimeCrew Organimizer.
 
-Lists every crate compiled into PhotoSorter.exe (x86_64-pc-windows-gnu,
+Lists every crate compiled into Organimizer.exe (x86_64-pc-windows-gnu,
 default features; build scripts and proc-macros included, dev-only crates
 not) with its license, and reproduces each crate's own license / notice
 file(s) so copyright lines are kept. The licenses of the fonts embedded by
@@ -59,16 +59,17 @@ def read(f):
     return f.read_text(encoding="utf-8", errors="replace").strip("\n").replace("\r\n", "\n")
 
 L = []
-L.append("PhotoSorter - third-party notices")
+L.append("PrimeCrew Organimizer - third-party notices")
 L.append("=" * 72)
-L.append("PhotoSorter is Copyright (C) 2026 PrimeCrew Software and licensed under")
+L.append("PrimeCrew Organimizer (formerly PhotoSorter) is Copyright (C) 2026")
+L.append("PrimeCrew Software and licensed under")
 L.append("the GNU General Public License v3.0 or later (see LICENSE).")
 L.append("")
-L.append("PhotoSorter.exe is built with the Rust crates listed below. Each crate")
+L.append("Organimizer.exe is built with the Rust crates listed below. Each crate")
 L.append("stays under its own license; for crates offered under a choice of")
-L.append("licenses (\"A OR B\") PhotoSorter uses them under the first permissive")
+L.append("licenses (\"A OR B\") Organimizer uses them under the first permissive")
 L.append("option shown in its notice below. The fonts built into the program are")
-L.append("listed in section 3.")
+L.append("listed in section 3; the optional TMDB lookup and logo in section 6.")
 L.append("")
 L.append("1. CRATES (%d)" % len(crates))
 L.append("-" * 72)
@@ -105,7 +106,7 @@ for p in crates:
         L.append(read(f))
 
 L.append("")
-L.append("3. FONTS EMBEDDED IN PhotoSorter.exe (from epaint_default_fonts)")
+L.append("3. FONTS EMBEDDED IN Organimizer.exe (from epaint_default_fonts)")
 L.append("-" * 72)
 fonts = next((p for p in crates if p["name"] == "epaint_default_fonts"), None)
 if fonts:
@@ -157,6 +158,22 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.""")
+
+L.append("")
+L.append("6. TMDB (THE MOVIE DATABASE)")
+L.append("-" * 72)
+L.append("""This product uses the TMDB API but is not endorsed or certified by TMDB.
+
+The optional title lookup on the Plex Media tab (off by default) uses the
+TMDB API with the user's own free API key, under TMDB's API Terms of Use
+(https://www.themoviedb.org/api-terms-of-use). Movie and TV data shown
+from a lookup comes from TMDB, https://www.themoviedb.org.
+
+The TMDB logo shown in Help > About (assets/tmdb/) is TMDB's approved
+"primary short" logo, used unchanged for attribution as TMDB's logo
+guidelines ask (https://www.themoviedb.org/about/logos-attribution).
+It is a trademark of TMDB and is not covered by this program's GPL
+license.""")
 
 text = "\n".join(L) + "\n"
 home = os.path.expanduser("~")

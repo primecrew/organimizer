@@ -10,8 +10,8 @@
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
-use photo_sorter::plan::{PlanOptions, Status, build_plan, stages_with_rules};
-use photo_sorter::{ops, scan, settings};
+use organimizer::plan::{PlanOptions, Status, build_plan, stages_with_rules};
+use organimizer::{ops, scan, settings};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

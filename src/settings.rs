@@ -1,6 +1,8 @@
-//! Settings in `PhotoSorter.ini`: beside the executable (portable, the
+//! Settings in `Organimizer.ini`: beside the executable (portable, the
 //! default) or, for a copy installed by setup, in
-//! `%APPDATA%\PrimeCrew Software\PhotoSorter` (see [`choose_ini_path`]).
+//! `%APPDATA%\PrimeCrew Software\Organimizer` (see [`choose_ini_path`]).
+//! On the first start of 3.0 an existing PhotoSorter 2.x `PhotoSorter.ini`
+//! is imported (copied, never changed or deleted); see [`legacy_ini_paths`].
 //!
 //! * The file is always (re)generated from a commented template in
 //!   [`Settings::to_ini`], so comments survive every save.
@@ -14,20 +16,60 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::blacklist::Blacklist;
 use crate::date_source::{DateConfig, DateMode, Fallback, SourceKind};
+use crate::favorites::Favorites;
+use crate::filetypes::TypeGroup;
 use crate::filename_date::DateOrder;
 use crate::rename::RuleSpec;
 use crate::scan::DEFAULT_EXTENSIONS;
 use crate::template::DEFAULT_TEMPLATE;
 use crate::window_state::{WindowLayout, format_widths, parse_num, parse_widths};
 
-pub const INI_NAME: &str = "PhotoSorter.ini";
+pub const INI_NAME: &str = "Organimizer.ini";
 /// Written beside the exe by setup: settings go to %APPDATA% instead.
-pub const INSTALLED_MARKER: &str = "PhotoSorter.installed";
+pub const INSTALLED_MARKER: &str = "Organimizer.installed";
 /// Optional file beside the exe that forces portable mode.
-pub const PORTABLE_MARKER: &str = "PhotoSorter.portable";
+pub const PORTABLE_MARKER: &str = "Organimizer.portable";
 /// Settings folder below %APPDATA% in installed mode.
-pub const APPDATA_SUBDIR: [&str; 2] = ["PrimeCrew Software", "PhotoSorter"];
+pub const APPDATA_SUBDIR: [&str; 2] = ["PrimeCrew Software", "Organimizer"];
+/// PhotoSorter 2.x settings, imported once (never modified or deleted).
+pub const LEGACY_INI_NAME: &str = "PhotoSorter.ini";
+pub const LEGACY_APPDATA_SUBDIR: [&str; 2] = ["PrimeCrew Software", "PhotoSorter"];
+pub const DEFAULT_TMDB_LANGUAGE: &str = "en-US";
+
+/// Plex tab settings (`[Plex]`, 3.0).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlexSettings {
+    /// Folder to analyze.
+    pub source: String,
+    pub include_subfolders: bool,
+    /// true = organize inside the source folder; false = move into the
+    /// Movies / TV library roots below.
+    pub in_place: bool,
+    pub movies_root: String,
+    pub tv_root: String,
+    /// TMDB lookups (off by default; needs the user's own key).
+    pub tmdb_enabled: bool,
+    /// The user's TMDB key or read access token. Stored only in this file.
+    pub tmdb_key: String,
+    pub tmdb_language: String,
+}
+
+impl Default for PlexSettings {
+    fn default() -> Self {
+        PlexSettings {
+            source: String::new(),
+            include_subfolders: true,
+            in_place: true,
+            movies_root: String::new(),
+            tv_root: String::new(),
+            tmdb_enabled: false,
+            tmdb_key: String::new(),
+            tmdb_language: DEFAULT_TMDB_LANGUAGE.into(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
@@ -85,6 +127,19 @@ pub struct Settings {
     /// Window position, maximized state, panel height, column widths and
     /// open/closed sections (`[Window]`, since 2.0.3).
     pub layout: WindowLayout,
+    /// Which files the Organize tab picks up (3.0; default = 2.x behavior).
+    pub file_types: TypeGroup,
+    /// Extensions for the "Custom list" type group.
+    pub custom_extensions: String,
+    /// Folders that cannot be chosen or scanned.
+    pub blacklist: Blacklist,
+    /// false = the blacklist is the built-in default list (recomputed from
+    /// the Windows folders on every start); true = the user's edited list.
+    pub blacklist_custom: bool,
+    pub favorites: Favorites,
+    pub plex: PlexSettings,
+    /// Last top-level tab: "organize" or "plex".
+    pub mode: String,
 }
 
 impl Default for Settings {
@@ -105,6 +160,13 @@ impl Default for Settings {
             window_width: crate::window_state::DEFAULT_SIZE[0],
             window_height: crate::window_state::DEFAULT_SIZE[1],
             layout: WindowLayout::default(),
+            file_types: TypeGroup::Media,
+            custom_extensions: String::new(),
+            blacklist: Blacklist::default(),
+            blacklist_custom: false,
+            favorites: Favorites::default(),
+            plex: PlexSettings::default(),
+            mode: "organize".into(),
         }
     }
 }
@@ -377,6 +439,56 @@ impl Settings {
         l.output_open = flag("open_output", l.output_open);
         l.output_more_open = flag("open_output_more", l.output_more_open);
         l.folder_advanced = flag("folder_advanced", l.folder_advanced);
+
+        // 3.0 sections (missing in 2.x files: defaults)
+        if let Some(g) = get("general", "file_types").and_then(TypeGroup::from_key) {
+            s.file_types = g;
+        }
+        if let Some(v) = get("general", "custom_extensions") {
+            s.custom_extensions = v.to_string();
+        }
+        if get("blacklist", "custom").and_then(parse_bool) == Some(true) {
+            let mut entries: Vec<(u32, String)> = d
+                .get("blacklist")
+                .into_iter()
+                .flatten()
+                .filter_map(|(k, v)| k.strip_prefix("block").and_then(|n| n.parse().ok()).map(|n| (n, v.clone())))
+                .filter(|(_, v)| Blacklist::validate_entry(v).is_ok())
+                .collect();
+            entries.sort_by_key(|(n, _)| *n);
+            s.blacklist = Blacklist { entries: entries.into_iter().map(|(_, v)| v).collect() };
+            s.blacklist_custom = true;
+        }
+        s.favorites = Favorites::from_ini_map(d.get("favorites"));
+        let p = &mut s.plex;
+        let pget = |k: &str| get("plex", k);
+        if let Some(v) = pget("source") {
+            p.source = v.to_string();
+        }
+        if let Some(v) = pget("include_subfolders").and_then(parse_bool) {
+            p.include_subfolders = v;
+        }
+        if let Some(v) = pget("destination") {
+            p.in_place = !v.trim().eq_ignore_ascii_case("roots");
+        }
+        if let Some(v) = pget("movies_root") {
+            p.movies_root = v.to_string();
+        }
+        if let Some(v) = pget("tv_root") {
+            p.tv_root = v.to_string();
+        }
+        if let Some(v) = pget("tmdb_enabled").and_then(parse_bool) {
+            p.tmdb_enabled = v;
+        }
+        if let Some(v) = pget("tmdb_key") {
+            p.tmdb_key = v.trim().to_string();
+        }
+        if let Some(v) = pget("tmdb_language").filter(|v| !v.trim().is_empty() && v.len() <= 10) {
+            p.tmdb_language = v.trim().to_string();
+        }
+        if let Some(v) = get("window", "mode").filter(|v| matches!(*v, "organize" | "plex")) {
+            s.mode = v.to_string();
+        }
         s
     }
 
@@ -531,16 +643,18 @@ impl Settings {
         let one = |s: &str| s.replace(['\r', '\n'], " ");
         format!(
             r#"; ===========================================================================
-; PhotoSorter settings
+; PrimeCrew Organimizer settings
 ; ---------------------------------------------------------------------------
-; This file is the ONLY place PhotoSorter stores settings (no registry). It
-; lives next to PhotoSorter.exe (portable copy) or, when PhotoSorter was
-; installed with setup, in %APPDATA%\PrimeCrew Software\PhotoSorter.
+; This file is the ONLY place Organimizer stores settings (no registry). It
+; lives next to Organimizer.exe (portable copy) or, when Organimizer was
+; installed with setup, in %APPDATA%\PrimeCrew Software\Organimizer.
+; (On the first start of 3.0 an existing PhotoSorter.ini was copied here;
+; the old file is left untouched.)
 ; Delete it to reset to defaults; a fresh, fully commented copy is written
 ; on the next start.
 ;
 ; Lines starting with ';' are comments. Unknown keys are ignored and invalid
-; values silently fall back to their defaults. PhotoSorter rewrites this file
+; values silently fall back to their defaults. Organimizer rewrites this file
 ; when it closes, so edit it while the app is not running.
 ; ===========================================================================
 
@@ -565,6 +679,21 @@ include_subfolders = {include_subfolders}
 ; (txt, pdf, xmp, json, ...) is ignored and never touched.
 ; Default: {default_exts}
 extensions = {extensions}
+
+; Which files the Organize tab picks up (3.0):
+;   media     = images & videos from 'extensions' above (as in PhotoSorter 2.x)
+;   images / videos / audio / documents / archives = built-in lists
+;   all       = every file except the protected ones below
+;   custom    = the extensions in 'custom_extensions'
+; Never touched, whatever is chosen: programs and scripts (exe, dll, sys, msi,
+; bat, cmd, ps1, vbs, com, scr, ...), shortcuts (lnk, url), ini files,
+; desktop.ini, Thumbs.db, hidden or system files, .git / .svn folders.
+; Default: media
+file_types = {file_types}
+
+; Extensions for file_types = custom, separated by commas. Protected types
+; are ignored. Default: empty
+custom_extensions = {custom_extensions}
 
 ; ---------------------------------------------------------------------------
 ; [Date] - which date decides the destination folder
@@ -711,6 +840,51 @@ folder_advanced = {folder_advanced}
 ; Tools > Options > "Reset window layout" (or deleting the keys above)
 ; restores the default window size, position and layout.
 
+; Last tab: organize / plex. Default: organize
+mode = {mode}
+
+; ---------------------------------------------------------------------------
+; [Blacklist] - folders that can never be chosen and are skipped while
+; scanning subfolders (Tools > Folder Blacklist). Case-insensitive, whole
+; folder names: C:\Windows does not block C:\WindowsStuff. * = any one
+; folder name (C:\Users\*\AppData), *: = any drive, <drive roots> = choosing
+; a drive root itself. custom = false: the built-in list, worked out from the
+; Windows folders on every start (the blockN lines are then ignored).
+; ---------------------------------------------------------------------------
+[Blacklist]
+; true = use the blockN lines below; false = built-in list. Default: false
+custom = {blacklist_custom}
+{blacklist}
+; ---------------------------------------------------------------------------
+; [Favorites] - favN = Name | Folder (the star button / Favorites menu)
+; ---------------------------------------------------------------------------
+[Favorites]
+{favorites}
+; ---------------------------------------------------------------------------
+; [Plex] - the Plex tab
+; ---------------------------------------------------------------------------
+[Plex]
+; Folder to analyze. Default: empty
+source = {plex_source}
+; Also analyze subfolders. Default: true
+include_subfolders = {plex_sub}
+; inplace = organize inside the source folder; roots = move movies to
+; movies_root and TV episodes to tv_root. Default: inplace
+destination = {plex_dest}
+; Library root for movies (destination = roots). Default: empty
+movies_root = {plex_movies}
+; Library root for TV shows (destination = roots). Default: empty
+tv_root = {plex_tv}
+; Optional TMDB lookups (title / year / episode names). Off by default.
+; tmdb_key is YOUR OWN TMDB API Read Access Token or API Key. It is stored
+; only here, on this PC, in plain text - do not share this file with it.
+; Help (F1) > "Getting a TMDB API key" explains how to get one (free).
+tmdb_enabled = {tmdb_enabled}
+; Your TMDB key (see above). Default: empty
+tmdb_key = {tmdb_key}
+; Language for TMDB titles, e.g. en-US, de-DE. Default: en-US
+tmdb_language = {tmdb_language}
+
 ; ---------------------------------------------------------------------------
 ; Presets: [Preset:Name] sections, saved from the app. Each holds a whole
 ; rule chain (ruleN keys as in [Rules]) plus the options include_subfolders,
@@ -748,6 +922,29 @@ folder_advanced = {folder_advanced}
             output_open = l.output_open,
             output_more_open = l.output_more_open,
             folder_advanced = l.folder_advanced,
+            file_types = self.file_types.key(),
+            custom_extensions = one(&self.custom_extensions),
+            mode = if self.mode == "plex" { "plex" } else { "organize" },
+            blacklist_custom = self.blacklist_custom,
+            blacklist = if self.blacklist_custom {
+                self.blacklist
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| format!("block{} = {}\n", i + 1, one(e)))
+                    .collect::<String>()
+            } else {
+                String::new()
+            },
+            favorites = self.favorites.to_ini_lines(),
+            plex_source = one(&self.plex.source),
+            plex_sub = self.plex.include_subfolders,
+            plex_dest = if self.plex.in_place { "inplace" } else { "roots" },
+            plex_movies = one(&self.plex.movies_root),
+            plex_tv = one(&self.plex.tv_root),
+            tmdb_enabled = self.plex.tmdb_enabled,
+            tmdb_key = one(self.plex.tmdb_key.trim()),
+            tmdb_language = one(&self.plex.tmdb_language),
         )
         .replace('\n', "\r\n") // Notepad-friendly line endings
     }
@@ -799,9 +996,9 @@ pub fn appdata_dir() -> Option<PathBuf> {
 /// Where the settings live.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsMode {
-    /// `PhotoSorter.ini` beside the exe (the zip; always the case before 2.0.5).
+    /// `Organimizer.ini` beside the exe (the zip; always the case before 2.0.5).
     Portable,
-    /// `%APPDATA%\PrimeCrew Software\PhotoSorter\PhotoSorter.ini`.
+    /// `%APPDATA%\PrimeCrew Software\Organimizer\Organimizer.ini`.
     AppData,
 }
 
@@ -816,7 +1013,7 @@ fn file_writable(p: &Path) -> bool {
 /// Can a new file be created in `dir`? Probes with a uniquely named temp
 /// file that is removed again (nothing else in the folder is touched).
 fn dir_writable(dir: &Path) -> bool {
-    let probe = dir.join(format!(".PhotoSorter-write-test-{}.tmp", std::process::id()));
+    let probe = dir.join(format!(".Organimizer-write-test-{}.tmp", std::process::id()));
     match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
         Ok(f) => {
             drop(f);
@@ -827,12 +1024,12 @@ fn dir_writable(dir: &Path) -> bool {
     }
 }
 
-/// Decide where `PhotoSorter.ini` lives, in this order:
-/// 1. `PhotoSorter.portable` beside the exe -> portable;
-/// 2. a writable `PhotoSorter.ini` beside the exe -> portable (an existing
+/// Decide where `Organimizer.ini` lives, in this order:
+/// 1. `Organimizer.portable` beside the exe -> portable;
+/// 2. a writable `Organimizer.ini` beside the exe -> portable (an existing
 ///    portable copy keeps working exactly as before);
-/// 3. `PhotoSorter.installed` (written by setup) -> AppData;
-/// 4. a read-only `PhotoSorter.ini` beside the exe -> portable, read-only
+/// 3. `Organimizer.installed` (written by setup) -> AppData;
+/// 4. a read-only `Organimizer.ini` beside the exe -> portable, read-only
 ///    (as before: loaded, not saved, with a notice);
 /// 5. the exe folder is writable -> portable (first start of the zip);
 /// 6. otherwise (e.g. copied into Program Files by hand) -> AppData.
@@ -871,6 +1068,36 @@ pub fn ini_path() -> Option<PathBuf> {
     exe_dir().map(|d| choose_ini_path(&d, appdata_dir().as_deref()).0)
 }
 
+/// Where PhotoSorter 2.x kept its settings, most likely first: for an
+/// installed copy the 2.x AppData file, for a portable copy the INI next to
+/// the exe (an Organimizer.exe unzipped into the old PhotoSorter folder).
+pub fn legacy_ini_paths(exe_dir: &Path, appdata: Option<&Path>, mode: SettingsMode) -> Vec<PathBuf> {
+    let beside = exe_dir.join(LEGACY_INI_NAME);
+    let in_appdata = appdata.map(|a| {
+        let mut p = a.to_path_buf();
+        for part in LEGACY_APPDATA_SUBDIR {
+            p.push(part);
+        }
+        p.join(LEGACY_INI_NAME)
+    });
+    match mode {
+        SettingsMode::AppData => in_appdata.into_iter().chain(std::iter::once(beside)).collect(),
+        SettingsMode::Portable => std::iter::once(beside).chain(in_appdata).collect(),
+    }
+}
+
+/// Settings path and the PhotoSorter 2.x files to import from.
+pub fn ini_path_and_legacy() -> (Option<PathBuf>, Vec<PathBuf>) {
+    match exe_dir() {
+        Some(d) => {
+            let app = appdata_dir();
+            let (p, mode) = choose_ini_path(&d, app.as_deref());
+            (Some(p), legacy_ini_paths(&d, app.as_deref(), mode))
+        }
+        None => (None, vec![]),
+    }
+}
+
 /// Result of loading the settings.
 pub struct Loaded {
     pub settings: Settings,
@@ -882,6 +1109,36 @@ pub struct Loaded {
 
 /// Load `path`, creating a commented default file if missing. Never fails.
 pub fn load_or_create(path: Option<PathBuf>) -> Loaded {
+    load_or_import(path, &[])
+}
+
+/// Like [`load_or_create`], but when `path` does not exist yet and one of
+/// the `legacy` PhotoSorter.ini files does, its settings and presets are
+/// imported into the new file. The old file is only read, never changed.
+pub fn load_or_import(path: Option<PathBuf>, legacy: &[PathBuf]) -> Loaded {
+    if let Some(p) = &path
+        && !p.exists()
+        && let Some((old, text)) =
+            legacy.iter().filter(|l| is_regular_file(l)).find_map(|l| std::fs::read(l).ok().map(|b| (l, b)))
+    {
+        let settings = Settings::from_ini(&String::from_utf8_lossy(&text));
+        if let Some(dir) = p.parent()
+            && !dir.as_os_str().is_empty()
+        {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let saved = save(p, &settings).is_ok();
+        let notice = Some(if saved {
+            format!("Imported PhotoSorter settings and presets from {} (the old file was left as it is).", old.display())
+        } else {
+            format!("Using PhotoSorter settings from {} (could not save {}).", old.display(), INI_NAME)
+        });
+        return Loaded { settings, path: saved.then(|| p.clone()), notice };
+    }
+    load_plain(path)
+}
+
+fn load_plain(path: Option<PathBuf>) -> Loaded {
     let Some(path) = path else {
         return Loaded {
             settings: Settings::default(),
@@ -900,7 +1157,7 @@ pub fn load_or_create(path: Option<PathBuf>) -> Loaded {
         }
         Err(_) => {
             let settings = Settings::default();
-            // installed mode: %APPDATA%\PrimeCrew Software\PhotoSorter may not exist yet
+            // installed mode: %APPDATA%\PrimeCrew Software\Organimizer may not exist yet
             if let Some(dir) = path.parent()
                 && !dir.as_os_str().is_empty()
             {
@@ -920,8 +1177,8 @@ pub fn load_or_create(path: Option<PathBuf>) -> Loaded {
     }
 }
 
-/// Write the INI safely: the new text goes to `PhotoSorter.ini.tmp` first,
-/// the previous file is kept as `PhotoSorter.ini.bak`, then the temp file
+/// Write the INI safely: the new text goes to `Organimizer.ini.tmp` first,
+/// the previous file is kept as `Organimizer.ini.bak`, then the temp file
 /// replaces the INI (an atomic rename on the same volume).
 pub fn save(path: &Path, s: &Settings) -> std::io::Result<()> {
     let tmp = path.with_extension("ini.tmp");
@@ -1308,12 +1565,12 @@ mod tests {
         let ini = d.path().join(INI_NAME);
         let mut s = Settings::default();
         save(&ini, &s).unwrap();
-        assert!(!d.path().join("PhotoSorter.ini.bak").exists()); // nothing to back up yet
+        assert!(!d.path().join("Organimizer.ini.bak").exists()); // nothing to back up yet
         let first = std::fs::read_to_string(&ini).unwrap();
         s.save_preset("New one");
         save(&ini, &s).unwrap();
-        assert_eq!(std::fs::read_to_string(d.path().join("PhotoSorter.ini.bak")).unwrap(), first);
-        assert!(!d.path().join("PhotoSorter.ini.tmp").exists());
+        assert_eq!(std::fs::read_to_string(d.path().join("Organimizer.ini.bak")).unwrap(), first);
+        assert!(!d.path().join("Organimizer.ini.tmp").exists());
         let now = std::fs::read_to_string(&ini).unwrap();
         assert!(now.starts_with("; ====") && now.contains("[Preset:New one]"));
         assert_eq!(Settings::from_ini(&now), s);
@@ -1394,7 +1651,7 @@ mod tests {
         use std::fs;
         let exe = tempfile::tempdir().unwrap();
         let app = tempfile::tempdir().unwrap();
-        let in_app = app.path().join("PrimeCrew Software").join("PhotoSorter").join(INI_NAME);
+        let in_app = app.path().join("PrimeCrew Software").join("Organimizer").join(INI_NAME);
         let beside = exe.path().join(INI_NAME);
         let choose = || choose_ini_path(exe.path(), Some(app.path()));
 
@@ -1425,7 +1682,7 @@ mod tests {
     #[test]
     fn installed_mode_creates_the_appdata_folder() {
         let app = tempfile::tempdir().unwrap();
-        let ini = app.path().join("PrimeCrew Software").join("PhotoSorter").join(INI_NAME);
+        let ini = app.path().join("PrimeCrew Software").join("Organimizer").join(INI_NAME);
         let l = load_or_create(Some(ini.clone()));
         assert_eq!(l.path.as_deref(), Some(ini.as_path()));
         assert!(l.notice.is_none());
@@ -1450,5 +1707,95 @@ mod tests {
             assert_eq!(mode, SettingsMode::AppData);
             assert!(p.starts_with(app.path()));
         }
+    }
+
+    #[test]
+    fn v3_sections_roundtrip_and_defaults() {
+        let mut s = Settings::default();
+        assert_eq!(s.file_types, TypeGroup::Media);
+        assert!(!s.blacklist_custom && !s.blacklist.entries.is_empty());
+        assert!(!s.plex.tmdb_enabled && s.plex.tmdb_key.is_empty() && s.plex.in_place);
+        s.file_types = TypeGroup::Custom;
+        s.custom_extensions = "psd, blend".into();
+        s.blacklist = Blacklist { entries: vec!["D:\\Keep".into(), "*:\\Temp".into()] };
+        s.blacklist_custom = true;
+        s.favorites.add("Movies", "D:\\Media\\Movies");
+        s.favorites.add("Shows; TV #1", "E:\\TV [new]");
+        s.plex = PlexSettings {
+            source: "D:\\Downloads".into(),
+            include_subfolders: false,
+            in_place: false,
+            movies_root: "D:\\Media\\Movies".into(),
+            tv_root: "E:\\TV".into(),
+            tmdb_enabled: true,
+            tmdb_key: "0123456789abcdef0123456789abcdef".into(),
+            tmdb_language: "de-DE".into(),
+        };
+        s.mode = "plex".into();
+        let text = s.to_ini();
+        assert_eq!(Settings::from_ini(&text), s);
+        assert!(text.contains("[Blacklist]") && text.contains("[Favorites]") && text.contains("[Plex]"));
+        // default blacklist is not written out (worked out again on start)
+        let d = Settings::default().to_ini();
+        assert!(!d.contains("block1 ="));
+        assert_eq!(Settings::from_ini(&d), Settings::default());
+        // a custom but empty blacklist stays empty
+        let mut e = Settings::default();
+        e.blacklist = Blacklist { entries: vec![] };
+        e.blacklist_custom = true;
+        assert_eq!(Settings::from_ini(&e.to_ini()).blacklist.entries.len(), 0);
+    }
+
+    #[test]
+    fn photosorter_settings_are_imported_once_and_never_touched() {
+        let exe = tempfile::tempdir().unwrap();
+        let app = tempfile::tempdir().unwrap();
+        // a PhotoSorter 2.0.5 installed copy kept its INI in AppData
+        let old_dir = app.path().join("PrimeCrew Software").join("PhotoSorter");
+        std::fs::create_dir_all(&old_dir).unwrap();
+        let mut old = Settings::default();
+        old.last_folder = "D:\\Pictures".into();
+        old.rules = sample_rules();
+        old.save_preset("Kindroid");
+        old.include_subfolders = true;
+        let old_text = old.to_ini().replace("Organimizer", "PhotoSorter");
+        let old_path = old_dir.join(LEGACY_INI_NAME);
+        std::fs::write(&old_path, &old_text).unwrap();
+        std::fs::write(exe.path().join(INSTALLED_MARKER), b"").unwrap();
+
+        let (new_path, mode) = choose_ini_path(exe.path(), Some(app.path()));
+        assert_eq!(mode, SettingsMode::AppData);
+        assert_eq!(new_path, app.path().join("PrimeCrew Software").join("Organimizer").join(INI_NAME));
+        let legacy = legacy_ini_paths(exe.path(), Some(app.path()), mode);
+        assert_eq!(legacy[0], old_path);
+        let l = load_or_import(Some(new_path.clone()), &legacy);
+        assert!(l.notice.as_deref().unwrap_or_default().contains("Imported PhotoSorter settings"));
+        assert_eq!(l.settings.last_folder, "D:\\Pictures");
+        assert_eq!(l.settings.rules, old.rules);
+        assert!(l.settings.find_preset("Kindroid").is_some());
+        assert!(l.settings.include_subfolders);
+        assert!(new_path.is_file());
+        // the old file is byte-for-byte unchanged and still there
+        assert_eq!(std::fs::read_to_string(&old_path).unwrap(), old_text);
+        // second start: the new file wins, no second import
+        let mut changed = l.settings.clone();
+        changed.last_folder = "E:\\New".into();
+        save(&new_path, &changed).unwrap();
+        let l2 = load_or_import(Some(new_path.clone()), &legacy);
+        assert!(l2.notice.is_none());
+        assert_eq!(l2.settings.last_folder, "E:\\New");
+        // portable: PhotoSorter.ini next to the exe is imported first
+        let port = tempfile::tempdir().unwrap();
+        std::fs::write(port.path().join(LEGACY_INI_NAME), &old_text).unwrap();
+        let (p2, m2) = choose_ini_path(port.path(), None);
+        assert_eq!(m2, SettingsMode::Portable);
+        let l3 = load_or_import(Some(p2.clone()), &legacy_ini_paths(port.path(), None, m2));
+        assert_eq!(l3.settings.last_folder, "D:\\Pictures");
+        assert!(port.path().join(LEGACY_INI_NAME).is_file() && p2.is_file());
+        // nothing to import -> plain defaults
+        let none = tempfile::tempdir().unwrap();
+        let l4 = load_or_import(Some(none.path().join(INI_NAME)), &[none.path().join(LEGACY_INI_NAME)]);
+        assert!(l4.notice.is_none());
+        assert_eq!(l4.settings.last_folder, "");
     }
 }

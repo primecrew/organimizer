@@ -4,6 +4,61 @@ All versions are Windows 10/11 builds (portable exe; from 2.0.5 also an
 installer). None of them is code-signed, and so far they have been tested on
 Linux and under Wine only, not on a real Windows PC.
 
+## 3.0.0 – PrimeCrew Organimizer (branch `v3-organimizer`, not released yet)
+- **Renamed** PhotoSorter → **PrimeCrew Organimizer**: window title,
+  header, About, `Organimizer.exe` (version info ProductName "PrimeCrew
+  Organimizer"), `Organimizer.ini`, `Organimizer-undo-*.json`, installer,
+  Start Menu `PrimeCrew Software\PrimeCrew Organimizer.lnk`, Add/Remove
+  Programs "PrimeCrew Organimizer", docs. Repository renamed to
+  `primecrew/organimizer`.
+- **Settings migration**: on first start `PhotoSorter.ini` (beside the exe
+  or in `%APPDATA%\PrimeCrew Software\PhotoSorter`) is imported once with
+  all presets; the old file is never modified or deleted. Undo also finds
+  `PhotoSorter-undo-*.json` logs.
+- **Installer** `Organimizer-3.0.0-setup.exe`: detects an installed
+  PhotoSorter (HKCU/HKLM uninstall entry) and treats it as an upgrade with
+  the shared banner "Updating existing installation: PhotoSorter v2.0.5 →
+  PrimeCrew Organimizer v3.0.0"; installs next to it
+  (`…\Programs\Organimizer`, same mode) and then removes only the old
+  PhotoSorter program files, its shortcuts and its uninstall entry
+  (settings, undo logs and user files are kept). Portable zip
+  `Organimizer-3.0.0-win64.zip`.
+- **Plex Media tab**: scan a folder, analyze movies / TV episodes / extras /
+  subtitles, propose the Plex layout (in place or into Movies / TV library
+  folders), per-file confidence (green / amber / red), editable overrides
+  (type, title, year, edition, season, episode, last episode, episode
+  title, extra type / name / movie-or-show), include checkboxes, filter,
+  preview / Apply / Undo with the same never-overwrite and undo-log
+  guarantees as the Organize tab.
+- **Optional TMDB lookup** (off by default): the user's own key (API Read
+  Access Token or v3 API key) stored only in `Organimizer.ini`; matches are
+  listed for the user to confirm; TV matches fill the episode title;
+  offline otherwise, friendly messages for network errors, 401 and 429.
+  HTTPS via `ureq` + `rustls` (feature `net`). Help > About shows the TMDB
+  logo and "This product uses the TMDB API but is not endorsed or certified
+  by TMDB."; THIRD-PARTY-NOTICES has a TMDB section.
+- **HELP.md** rewritten for 3.0 with a step-by-step "Getting a TMDB API
+  key" section; Tools > Options links to it next to the key field.
+- **File types**: Images & videos (default, unchanged 2.x list), Images,
+  Videos, Audio, Documents, Archives, All files, Custom list (Tools >
+  Options). Hard protections in every mode: executables, libraries,
+  installers, scripts, shortcuts, system files, Organimizer/PhotoSorter
+  settings and undo logs, hidden/system files and VCS / recycle-bin /
+  System Volume Information folders. Rules can change an extension only
+  between image/video types.
+- **Folder blacklist** (Tools > Folder Blacklist…): defaults from the
+  environment (SystemRoot/windir, ProgramFiles*, ProgramData, profile
+  AppData, Default / All Users, Windows.old, Recovery, `$Recycle.Bin`,
+  System Volume Information, EFI, drive roots, …); add / edit / remove,
+  test a path, Reset to defaults. Case-insensitive, component-wise
+  (prefix-safe) matching with `*` and `*:` wildcards. Blocked folders
+  cannot be selected ("Folder not allowed") and are skipped in recursion.
+- **Favorites**: ☆/★ toggle next to the folder field (Organize and Plex),
+  Favorites menu, Manage Favorites window (add, rename, edit path, remove,
+  reorder).
+- Tests: 130 unit tests (Plex parser cases, blacklist, protected types,
+  favorites, settings migration, plus all 2.x tests).
+
 ## 2.0.5 (git tag `v2.0.5`, 2026-11-21)
 - Help > About: app icon (64x64), version, publisher (PrimeCrew Software),
   short description, portable / unsigned note, license line.

@@ -154,7 +154,8 @@ pub trait Stage: Send + Sync {
 #[derive(Default)]
 pub struct RenameStage {
     pub rules: Vec<Box<dyn RenameRule>>,
-    /// Lower-case extensions (no dot) that may be renamed.
+    /// Lower-case extensions (no dot) that may be renamed; `"*"` = any
+    /// type the scan accepted ("All files"). Protected names never are.
     pub allowed_exts: Vec<String>,
     /// (files renamed so far, per source folder counters)
     counters: Mutex<(u64, HashMap<PathBuf, u64>)>,
@@ -182,8 +183,12 @@ impl Stage for RenameStage {
         let original = item.new_name.clone();
         let (stem, ext) = split_name(&original);
         let ext_key = ext.trim_start_matches('.').to_ascii_lowercase();
-        if ext.is_empty() || !self.allowed_exts.contains(&ext_key) {
-            item.warnings.push("Not an image/video extension: name left unchanged".into());
+        let any = self.allowed_exts.iter().any(|e| e == "*");
+        if ext.is_empty()
+            || (!any && !self.allowed_exts.contains(&ext_key))
+            || crate::filetypes::is_protected_name(&original)
+        {
+            item.warnings.push("File type not selected: name left unchanged".into());
             return;
         }
         let (index, folder_index) = {
@@ -212,12 +217,17 @@ impl Stage for RenameStage {
         // (Extension rule) or change its letter case.
         if !parts.ext.eq_ignore_ascii_case(ext) {
             let new = parts.ext.trim_start_matches('.');
-            if parts.ext.starts_with('.') && crate::scan::is_media_extension(new) {
+            // only image / video files may switch to another image / video
+            // extension; every other type keeps its extension (case aside)
+            if parts.ext.starts_with('.')
+                && crate::scan::is_media_extension(new)
+                && crate::scan::is_media_extension(&ext_key)
+            {
                 if !parts.warnings.iter().any(|w| w.starts_with("Extension")) {
                     parts.warnings.push(format!("Extension changes from {ext} to {}", parts.ext));
                 }
             } else {
-                parts.warnings.push("A rule tried to set a non-media extension; kept the original".into());
+                parts.warnings.push("A rule tried to change the extension to another type; kept the original".into());
                 parts.ext = ext.to_string();
             }
         }

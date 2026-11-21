@@ -1,23 +1,25 @@
 [package]
-name = "photo-sorter"
-version = "2.0.5"
+name = "organimizer"
+version = "3.0.0"
 edition = "2024"
-description = "Portable tool that renames and sorts images and videos into 'Month YYYY' folders"
+description = "PrimeCrew Organimizer: rename and sort files into date folders, and organize movies and TV shows for Plex"
 license = "GPL-3.0-or-later"
 authors = ["PrimeCrew Software"]
 
 [lib]
-name = "photo_sorter"
+name = "organimizer"
 path = "src/lib.rs"
 
 [[bin]]
-name = "PhotoSorter"
+name = "Organimizer"
 path = "src/main.rs"
 required-features = ["gui"]
 
 [features]
-default = ["gui"]
+default = ["gui", "net"]
 gui = ["dep:eframe", "dep:egui", "dep:egui_extras", "dep:rfd"]
+# TMDB lookups (Plex tab): pure-Rust HTTPS client
+net = ["dep:ureq"]
 
 [dependencies]
 chrono = "0.4.45"
@@ -30,6 +32,7 @@ eframe = { version = "0.37.0", default-features = false, features = ["default_fo
 egui_extras = { version = "0.37.0", default-features = false, optional = true }
 rfd = { version = "0.17.2", optional = true }
 egui = { version = "0.37", default-features = false, features = ["monochrome_emoji_fonts"], optional = true }
+ureq = { version = "2.12", default-features = false, features = ["tls"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 # ShellExecuteW for Help > README.txt and "Open ... Folder" (no shell / cmd);

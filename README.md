@@ -1,12 +1,20 @@
-# PhotoSorter 2.0.5
+# PrimeCrew Organimizer 3.0.0
 
-By PrimeCrew Software.
+By PrimeCrew Software. Formerly **PhotoSorter** (2.x; the last PhotoSorter
+release is [v2.0.5](https://github.com/primecrew/organimizer/releases/tag/v2.0.5)).
 
-PhotoSorter is a portable Windows 10/11 desktop app (Rust + eframe/egui, one
-exe, no installer) for tidying photo and video folders. It renames files with
-an ordered, ReNamer Pro-style rule list and then, optionally, moves them into
-date folders such as `March 2024` inside each file's own folder. Everything is
-shown in a live preview first, and the last run can be undone.
+Organimizer is a portable Windows 10/11 desktop app (Rust + eframe/egui, one
+exe) with two tabs:
+
+- **Organize** – renames files with an ordered, ReNamer Pro-style rule list
+  and then, optionally, moves them into date folders such as `March 2024`
+  inside each file's own folder (the PhotoSorter pipeline).
+- **Plex Media** – analyzes movies, TV episodes, extras and subtitles and
+  moves them into the folder layout Plex expects, in place or into your
+  library folders.
+
+Everything is shown in a preview first, nothing is ever overwritten or
+deleted, and the last run can be undone.
 
 ## Features
 
@@ -18,58 +26,76 @@ shown in a live preview first, and the last run can be undone.
   folder-name builder, an Advanced template field, and nested folders
   (`2024\03 March`). Dates come from filename, EXIF / video metadata,
   modified or created time, in a configurable priority order.
-- **Live preview** of before/after names and destination folders; nothing
-  changes until you click Apply and confirm.
-- **Undo**: a JSON undo log is written before anything moves; Undo restores
-  the original names and locations and removes created folders.
-- **Collision safety**: never overwrites, never deletes; clashes (including
-  ones created by renames in the same batch) get ` (1)` suffixes; Windows
-  name rules (illegal characters, reserved names, trailing dots/spaces, path
-  length) are checked and flagged.
-- **Images and videos only**: png, jpg, jpeg, gif, bmp, webp, tif, tiff,
-  heic, heif, camera RAW (cr2, nef, arw, dng) and mp4, mov, m4v, avi, mkv,
-  wmv, webm, mpg, mpeg, mts, m2ts, 3gp. Other files (txt, pdf, xmp/json
-  sidecars...) are never touched. The list is editable in Tools > Options.
-- **Presets** for rule chains and folder options (load, save, manage,
-  duplicate, rename, delete).
-- **Menus and Options**: File / Presets / Tools / Help; theme (Dark, Light,
-  Follow system), file types and date priority live in Tools > Options.
-  Help (F1) opens `HELP.md` beside the exe (falls back to `README.txt`);
-  Help > About shows the icon, version, publisher and build notes.
-- **Settings** in a commented `PhotoSorter.ini`: beside the exe for the
-  portable zip, `%APPDATA%\PrimeCrew Software\PhotoSorter` when installed
-  (no registry), including **window memory** (position, size, column
-  widths, panel height, open sections).
+- **Plex Media tab** (3.0): movie / episode / extra / subtitle detection
+  (`Title.2010.1080p…`, `S01E02`, `1x02`, Season folders, Specials,
+  date-based shows, multi-episode files, editions, `-trailer` and extras
+  folders, `Subs` folders and language / forced / SDH tags, samples
+  skipped), Plex names such as `Heat (1995)\Heat (1995).mkv` and
+  `Show\Season 01\Show - s01e02 - Title.mkv`, a confidence per file
+  (green / amber / red), and an editor for type, title, year, edition,
+  season, episode, episode title and extra type.
+- **Optional TMDB lookup** (off by default): with your own free TMDB key
+  (stored only in your INI) Organimizer lists TMDB matches for you to
+  confirm; offline otherwise. HTTPS via `ureq` + `rustls`. HELP.md explains
+  step by step how to get a key.
+- **File types**: Images & videos (default, the 2.x list), Images, Videos,
+  Audio, Documents, Archives, All files or a custom list. Programs, scripts,
+  shortcuts, system and hidden files are always protected.
+- **Folder blacklist** (Tools > Folder Blacklist…): Windows system folders
+  by default (from the environment: SystemRoot, Program Files, ProgramData,
+  AppData, …, plus drive roots); add / edit / remove / reset. Blocked
+  folders cannot be chosen and are skipped while scanning; matching is
+  case-insensitive and component-wise (`C:\Windows` ≠ `C:\WindowsStuff`).
+- **Favorites**: a ☆/★ toggle next to the folder field, a Favorites menu
+  and a Manage Favorites window (rename, edit, reorder, remove).
+- **Live preview**, **undo** (JSON undo log written before anything moves),
+  **collision safety** (never overwrites; ` (1)` suffixes; Windows name
+  rules checked), **presets**, Dark / Light / Follow system theme and
+  window memory.
+- **Settings** in a commented `Organimizer.ini`: beside the exe for the
+  portable zip, `%APPDATA%\PrimeCrew Software\Organimizer` when installed
+  (no registry). PhotoSorter's `PhotoSorter.ini` is imported on first start
+  and never modified.
 
-**Download:** `PhotoSorter-2.0.5-win64.zip` (portable: settings in
-`PhotoSorter.ini` next to the exe) or `PhotoSorter-2.0.5-setup.exe`
-(installer: Start Menu › PrimeCrew Software › PhotoSorter, Add/Remove
-Programs, settings in `%APPDATA%\PrimeCrew Software\PhotoSorter`). Both
-contain README.txt, HELP.md, LICENSE and THIRD-PARTY-NOTICES.txt.
+**Download:** `Organimizer-3.0.0-win64.zip` (portable) or
+`Organimizer-3.0.0-setup.exe` (installer: Start Menu › PrimeCrew Software ›
+PrimeCrew Organimizer, Add/Remove Programs "PrimeCrew Organimizer"; it
+upgrades an installed PhotoSorter 2.x and removes the old program, shortcut
+and Add/Remove entry). Both contain README.txt, HELP.md, LICENSE and
+THIRD-PARTY-NOTICES.txt.
 
 **Status:** the exe is not code-signed, so Windows SmartScreen will probably
 warn on first run (More info > Run anyway; compare the SHA-256 published with
 each release). It has been tested on Linux and under Wine only, not yet on a
 real Windows PC.
 
-End-user docs: `dist/v2.0.5/README.txt` and `dist/v2.0.5/HELP.md` (shipped
+End-user docs: `dist/v3.0.0/README.txt` and `dist/v3.0.0/HELP.md` (shipped
 as `README.txt` and `HELP.md`, together with `LICENSE` and
-`dist/v2.0.5/THIRD-PARTY-NOTICES.txt`);
+`dist/v3.0.0/THIRD-PARTY-NOTICES.txt`); older versions under `dist/v2.*`,
 v1 docs: `dist/README.txt`. Version history: [CHANGELOG.md](CHANGELOG.md).
-Test notes: `docs/v2/TEST-SUMMARY.md`.
+Test notes: `docs/v2/TEST-SUMMARY.md`, `docs/v3/TEST-SUMMARY.md`;
+screenshots: `docs/v3/screenshots/`.
+
+TMDB: This product uses the TMDB API but is not endorsed or certified by
+TMDB.
 
 ## Window layout (top to bottom) and why
 
-0. **Header** – the app icon, "PhotoSorter", the version and a one-line
-   description, with the theme toggle and A−/A+ text size on the right.
-   **Menu bar** – File (New Project Ctrl+N, Open Folder… Ctrl+O, Undo Last
-   Run…, Exit), Presets (Load ▸, Save current as preset…, Manage
-   Presets…), Tools (Options…: file types with "Reset to defaults" + Auto
-   date priority; Open Settings / Undo Log Folder), Help (F1 → HELP.md, or
-   README.txt if HELP.md is missing, via `ShellExecuteW`; About…).
-1. **Source & filter** – folder, include subfolders (off by default since
-   2.0.4), one-line file-type
-   summary ("File types: 26 image & video types") + "Options…" button.
+0. **Header** – the app icon, "PrimeCrew Organimizer", the version and a
+   one-line description, with the theme toggle and A−/A+ text size on the
+   right. **Menu bar** – File (New Project Ctrl+N, Open Folder… Ctrl+O, Undo
+   Last Run…, Exit), Presets (Load ▸, Save current as preset…, Manage
+   Presets…), Favorites (add/remove current folder, the favorites, Manage
+   Favorites…), Tools (Options…: file types, custom list, TMDB key, Auto
+   date priority; Folder Blacklist…; Manage Favorites…; Open Settings / Undo
+   Log Folder), Help (F1 → HELP.md, or README.txt if HELP.md is missing,
+   via `ShellExecuteW`; About… with the TMDB attribution).
+   **Tabs** – Organize (steps 1–5 below) | Plex Media (source, destination,
+   TMDB status; table with confidence dots; "Correct this file" panel;
+   Apply / Undo bar).
+1. **Source & filter** – folder with the ☆/★ favorite toggle, include
+   subfolders (off by default since 2.0.4), file-type picker with a
+   summary + "Options…" button.
 2. **Rename rules** – ReNamer-style list: checkbox per rule, ⏶/⏷ reorder,
    duplicate, delete, ✏ inline editor, "➕ Add rule" menu, presets row.
 3. **Output folder** – "Sort into date folders" toggle + date source; a
@@ -94,7 +120,7 @@ editor) live in Tools > Options since 2.0.2 to keep the main window short.
 
 Since 2.0.3 the window remembers its position, size, maximized state, the
 height of the top panel, the preview column widths and which sections are
-collapsed (`[Window]` in `PhotoSorter.ini`; saved on exit and ~1.5 s after a
+collapsed (`[Window]` in `Organimizer.ini`; saved on exit and ~1.5 s after a
 change, clamped on restore so it is never off-screen or tiny). Tools >
 Options > Appearance has Dark / Light / Follow system, text size and "Reset
 window layout"; the ☀/🌙 icon in the top bar stays as a quick toggle.
@@ -104,7 +130,7 @@ and every created level is recorded in the undo log.
 
 ## Include subfolders: off by default (since 2.0.4)
 
-A fresh start (no `PhotoSorter.ini`) now has "Include subfolders" unticked,
+A fresh start (no `Organimizer.ini`) now has "Include subfolders" unticked,
 so the preview and Apply only touch the files directly inside the chosen
 folder; tick the box to also scan every subfolder (each folder with photos
 then gets its own date folders). A missing or invalid `include_subfolders`
@@ -121,19 +147,24 @@ current "Include subfolders" setting.
 | Path | Purpose |
 |---|---|
 | `src/lib.rs` | core library (no GUI), fully unit tested |
-| `src/scan.rs` | folder walk (no symlink following), media-only extension allowlist |
+| `src/scan.rs` | folder walk (no symlink following, protected / hidden / blacklisted folders skipped), extension filter |
+| `src/filetypes.rs` | file type groups, custom list, protected extensions / names / folders |
+| `src/blacklist.rs` | folder blacklist: defaults from the environment, component-wise case-insensitive matching with `*` / `*:` |
+| `src/favorites.rs` | favorites list (add / toggle / edit / reorder, INI lines) |
+| `src/plex.rs` | Plex analysis (movies, episodes, extras, subtitles, confidence), Plex paths, plan building |
+| `src/tmdb.rs` | optional TMDB lookup (key detection, URLs, JSON parsing; HTTPS with `ureq` + `rustls` behind the `net` feature) |
 | `src/filename_date.rs` | smart filename date parser |
 | `src/date_source.rs` | Filename / EXIF (+ MP4/MOV creation time) / Modified / Created, Auto priority, fallback |
 | `src/template.rs` | folder template `{MMMM} {YYYY}` (+ `{/}` nested levels), ready-made layouts, builder ⇄ template mapping, warnings, "already sorted" detection |
 | `src/rename.rs` | rename rules (`RuleSpec` data + compiled `Box<dyn RenameRule>`), INI encoding, Windows name validation/sanitising |
 | `src/plan.rs` | pipeline `RenameStage` (rules) → `FolderStage` (Month YYYY); collision resolution incl. same-batch renames |
 | `src/ops.rs` | apply (rename, case-only rename, copy+verify+delete across volumes), undo log written first, undo |
-| `src/settings.rs` | commented `PhotoSorter.ini` (beside the exe, or `%APPDATA%` when installed: `choose_ini_path`) incl. `[Rules]` and `[Preset:Name]` (+ `scope`), preset duplicate/rename/validate, atomic save with `.bak` |
+| `src/settings.rs` | commented `Organimizer.ini` (beside the exe, or `%APPDATA%` when installed: `choose_ini_path`) incl. `[Rules]`, `[Preset:Name]` (+ `scope`), `[Blacklist]`, `[Favorites]`, `[Plex]`; one-time import of `PhotoSorter.ini`; atomic save with `.bak` |
 | `src/window_state.rs` | `[Window]` layout values: parse, validate and clamp the restored placement to the monitors' work areas |
 | `src/session.rs` | File > New Project reset + confirmation reasons, preset summaries |
 | `src/about.rs` | product, publisher (PrimeCrew Software), version and license strings for About and the header |
 | `src/desktop.rs` | open HELP.md (or README.txt) / folders with the default app (`ShellExecuteW`, no shell), monitor work areas |
-| `src/gui.rs`, `src/main.rs` | egui front-end, background worker, debounced live preview |
+| `src/gui.rs`, `src/gui_v3.rs`, `src/main.rs` | egui front-end (Organize tab; Plex tab, blacklist editor, favorites in `gui_v3.rs`), background workers, debounced live preview |
 | `examples/e2e.rs` | headless driver used for end-to-end tests (not shipped) |
 
 With no rule enabled the rename stage is a no-op and behaviour is identical
@@ -159,7 +190,7 @@ scripts/build-release.sh   # release: exe (--remap-path-prefix), notices, zip, N
 # run the core tests as a Windows binary under Wine
 CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine64 cargo test --no-default-features --target x86_64-pc-windows-gnu
 # headless end-to-end run with a preset from an INI
-cargo run --no-default-features --example e2e -- <folder> <PhotoSorter.ini> --preset "Name" [--apply] [--undo]
+cargo run --no-default-features --example e2e -- <folder> <Organimizer.ini> --preset "Name" [--apply] [--undo]
 ```
 
 The release build links statically (`+crt-static`, `-static`; see
@@ -170,23 +201,32 @@ version resource names PrimeCrew Software as the company.
 ## Installer
 
 `installer/installer.nsi` (NSIS 3, built by `scripts/build-release.sh`
-with `makensis`) follows the Encode FFS installer: per-user by default
-(`%LOCALAPPDATA%\Programs\PhotoSorter`, no admin rights) or for everyone
-(`Program Files\PhotoSorter`), Start Menu shortcut
-`PrimeCrew Software\PhotoSorter.lnk` (shared brand folder), optional
-desktop shortcut, Add/Remove Programs entry under
-`...\Uninstall\PhotoSorter`, in-place upgrade. It writes
-`PhotoSorter.installed` next to the exe; `settings::choose_ini_path` then
-uses `%APPDATA%\PrimeCrew Software\PhotoSorter\PhotoSorter.ini`. The
+with `makensis`) follows the shared PrimeCrew installer look (Encode FFS,
+Tweakinator): per-user by default (`%LOCALAPPDATA%\Programs\Organimizer`,
+no admin rights) or for everyone (`Program Files\Organimizer`), Start Menu
+shortcut `PrimeCrew Software\PrimeCrew Organimizer.lnk` (shared brand
+folder), optional desktop shortcut, Add/Remove Programs entry
+"PrimeCrew Organimizer" under `...\Uninstall\Organimizer`, in-place
+upgrade with the "Updating existing installation: … v<old> → v<new>"
+banner. An installed PhotoSorter 2.x (`...\Uninstall\PhotoSorter`) is
+detected as an upgrade ("PhotoSorter v2.0.5 → PrimeCrew Organimizer
+v3.0.0"); after installing, setup removes the old PhotoSorter program
+files, shortcuts and uninstall entry (never settings, undo logs or user
+files). It writes `Organimizer.installed` next to the exe;
+`settings::choose_ini_path` then uses
+`%APPDATA%\PrimeCrew Software\Organimizer\Organimizer.ini`. The
 uninstaller removes only what setup installed and the brand folder only
 when it is empty. `scripts/gen-third-party-notices.py` writes
 THIRD-PARTY-NOTICES.txt from `cargo metadata`.
 
 ## Changelog
 
-See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4, 2.0.5.
+See [CHANGELOG.md](CHANGELOG.md): 0.1.0 (v1.0), 2.0, 2.0.1, 2.0.2, 2.0.3, 2.0.4, 2.0.5, 3.0.0.
 
 ## License
 
 Copyright (C) 2026 PrimeCrew Software. Licensed under the GNU General Public License v3.0 or later. See LICENSE.
+
+The TMDB logo in `assets/tmdb/` is TMDB's approved attribution logo, a
+trademark of TMDB, and not covered by the GPL.
 

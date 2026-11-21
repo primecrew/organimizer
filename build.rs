@@ -8,12 +8,12 @@ fn main() {
             // keep in sync with src/about.rs (checked by a unit test);
             // FileVersion / ProductVersion come from Cargo.toml
             .set("CompanyName", "PrimeCrew Software")
-            .set("ProductName", "PhotoSorter")
+            .set("ProductName", "PrimeCrew Organimizer")
             // FileDescription is what Task Manager shows, so keep it short
-            .set("FileDescription", "PhotoSorter")
-            .set("Comments", "Rename and sort photos and videos into date folders")
-            .set("InternalName", "PhotoSorter")
-            .set("OriginalFilename", "PhotoSorter.exe")
+            .set("FileDescription", "PrimeCrew Organimizer")
+            .set("Comments", "Rename and sort files into date folders, and organize movies and TV shows for Plex")
+            .set("InternalName", "Organimizer")
+            .set("OriginalFilename", "Organimizer.exe")
             .set("LegalCopyright", "Copyright (C) 2026 PrimeCrew Software. Licensed under GPL v3 or later.");
         if let Err(e) = res.compile() {
             println!("cargo:warning=could not embed Windows resources: {e}");

@@ -1,4 +1,4 @@
-//! PhotoSorter core library.
+//! PrimeCrew Organimizer core library (PhotoSorter before 3.0).
 //!
 //! The GUI (`main.rs` / `gui.rs`) is a thin shell over this library so that
 //! all of the file-system logic can be unit tested on any platform.
@@ -22,18 +22,27 @@
 //! 7. [`session`] (New Project, preset summaries) and [`desktop`] (open the
 //!    help file / folders with the default app) back the menu bar;
 //!    [`about`] holds the product / publisher strings.
+//! 8. 3.0: [`filetypes`] (type groups + files that are never touched),
+//!    [`blacklist`] (system folders that cannot be chosen or scanned),
+//!    [`favorites`], [`plex`] (movie / TV recognition and the Plex layout)
+//!    and [`tmdb`] (optional online lookup).
 
 pub mod about;
+pub mod blacklist;
 pub mod date_source;
 pub mod desktop;
+pub mod favorites;
+pub mod filetypes;
 pub mod filename_date;
 pub mod ops;
 pub mod plan;
+pub mod plex;
 pub mod rename;
 pub mod scan;
 pub mod session;
 pub mod settings;
 pub mod template;
+pub mod tmdb;
 pub mod window_state;
 
 /// Lowest year considered a plausible photo date.

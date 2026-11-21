@@ -1,12 +1,15 @@
 //! Opening the help file / folders with the default Windows app, safely.
 //!
-//! Only paths PhotoSorter builds itself are opened: `HELP.md` (or, if that
+//! Only paths Organimizer builds itself are opened: `HELP.md` (or, if that
 //! is missing, `README.txt`) next to the exe, the exe's folder, or the folder that holds an undo log. On
 //! Windows the path goes to `ShellExecuteW(…, "open", path, NULL, …)`, which
 //! opens it with the registered default app (Notepad for .txt, whatever is
 //! registered for .md, Explorer for folders) - no `cmd /c start`, no command string, no parameters - and
 //! only after checking it is an existing absolute file / folder. Fallback:
 //! `notepad.exe <file>` / `explorer.exe <folder>` with one argument.
+//!
+//! [`open_known_url`] opens one of the fixed TMDB web pages (constants in
+//! the code, never a URL from a file or the network) in the default browser.
 //!
 //! [`monitor_work_areas`] lists the monitors (read-only) so a remembered
 //! window position can be checked before the window is created.
@@ -104,6 +107,28 @@ pub fn open_folder(dir: &Path) -> io::Result<()> {
     #[cfg(not(windows))]
     {
         Command::new("xdg-open").arg(dir).spawn().map(|_| ())
+    }
+}
+
+/// Web pages Organimizer may open: TMDB's home page and its API settings
+/// page (Help > Getting a TMDB API key). Anything else is refused.
+pub const KNOWN_URLS: &[&str] = &[crate::tmdb::WEBSITE, crate::tmdb::API_SETTINGS_URL, crate::tmdb::SIGNUP_URL];
+
+/// Open one of [`KNOWN_URLS`] in the default browser.
+pub fn open_known_url(url: &str) -> io::Result<()> {
+    if !KNOWN_URLS.contains(&url) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not an allowed address"));
+    }
+    #[cfg(windows)]
+    {
+        if shell_open(Path::new(url)) {
+            return Ok(());
+        }
+        Err(io::Error::other(format!("Could not open {url} - open it in your browser by hand")))
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("xdg-open").arg(url).spawn().map(|_| ())
     }
 }
 

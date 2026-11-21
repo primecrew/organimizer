@@ -4,6 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::blacklist::Blacklist;
+use crate::filetypes::{self, Filter};
+
 /// Default extension list (images, camera RAW, videos).
 pub const DEFAULT_EXTENSIONS: &str = "png, jpg, jpeg, gif, bmp, webp, tif, tiff, heic, heif, \
 cr2, nef, arw, dng, \
@@ -90,16 +93,37 @@ pub fn has_extension(path: &Path, exts: &[String]) -> bool {
 #[derive(Debug, Default)]
 pub struct ScanResult {
     pub files: Vec<PathBuf>,
+    /// Blacklisted subfolders that were not entered (3.0).
+    pub skipped_dirs: Vec<PathBuf>,
     pub errors: Vec<(PathBuf, String)>,
     pub dirs_scanned: usize,
 }
 
-/// Collect image files under `root`. Symlinks / junctions are never followed
-/// (avoids loops and escaping the chosen folder).
+/// Collect image / video files under `root` (the 2.x behavior): only the
+/// listed extensions, and only image / video types.
 pub fn scan(
     root: &Path,
     recursive: bool,
     exts: &[String],
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(usize, &Path),
+) -> ScanResult {
+    let media: Vec<String> = exts.iter().filter(|e| is_media_extension(e)).cloned().collect();
+    scan_filtered(root, recursive, &Filter::Exts(media), &Blacklist { entries: vec![] }, cancel, progress)
+}
+
+/// Collect the files under `root` that `filter` accepts (3.0).
+///
+/// Never returned, whatever the filter: protected names (programs, scripts,
+/// shortcuts, system files, undo logs), hidden or system-flagged files.
+/// Never entered: symlinks / junctions, hidden or system folders,
+/// version-control folders (`.git` ...) and blacklisted folders (each one
+/// skipped is listed in `skipped_dirs`).
+pub fn scan_filtered(
+    root: &Path,
+    recursive: bool,
+    filter: &Filter,
+    blacklist: &Blacklist,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(usize, &Path),
 ) -> ScanResult {
@@ -138,14 +162,21 @@ pub fn scan(
             if ft.is_symlink() {
                 continue;
             }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let hidden = || entry.metadata().map(|m| filetypes::is_hidden_or_system(&path, &m)).unwrap_or(true);
             if ft.is_dir() {
-                if recursive {
-                    subdirs.push(path);
+                if !recursive {
+                    continue;
                 }
-            } else if ft.is_file()
-                && has_extension(&path, exts)
-                && path.extension().is_some_and(|e| is_media_extension(&e.to_string_lossy()))
-            {
+                if filetypes::is_protected_dir_name(&name) || hidden() {
+                    continue;
+                }
+                if blacklist.is_blocked(&path) {
+                    res.skipped_dirs.push(path);
+                    continue;
+                }
+                subdirs.push(path);
+            } else if ft.is_file() && filter.accepts(&name) && !hidden() {
                 res.files.push(path);
             }
         }
@@ -243,5 +274,36 @@ mod tests {
         // ticking the box finds the nested files too
         let r = scan(d.path(), true, &exts, &c, &mut |_, _| {});
         assert_eq!(r.files.len(), 5);
+    }
+
+    #[test]
+    fn scan_filtered_protections_and_blacklist() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        for f in [
+            "a.jpg", "song.mp3", "doc.pdf", "setup.exe", "run.bat", "link.lnk", "desktop.ini", "Thumbs.db",
+            ".hidden.jpg", "README", "PhotoSorter-undo-20250101-000000.json", "sub/b.mp4", "sub/x.dll",
+            ".git/config.txt", ".git/obj.jpg", "keep/c.txt", "blocked/d.jpg", "blocked/deep/e.jpg",
+        ] {
+            let p = r.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"x").unwrap();
+        }
+        let c = AtomicBool::new(false);
+        let names = |res: &ScanResult| -> Vec<String> {
+            res.files.iter().map(|p| p.strip_prefix(r).unwrap().to_string_lossy().replace('\\', "/")).collect()
+        };
+        // All files: everything safe, nothing protected
+        let bl = Blacklist { entries: vec![r.join("blocked").to_string_lossy().replace('/', "\\")] };
+        let res = scan_filtered(r, true, &Filter::All, &bl, &c, &mut |_, _| {});
+        assert_eq!(names(&res), ["a.jpg", "doc.pdf", "keep/c.txt", "song.mp3", "sub/b.mp4"]);
+        assert_eq!(res.skipped_dirs, vec![r.join("blocked")]);
+        // a forged list cannot pick up protected types either
+        let forged = Filter::Exts(vec!["exe".into(), "lnk".into(), "ini".into(), "db".into(), "jpg".into()]);
+        let res = scan_filtered(r, false, &forged, &Blacklist { entries: vec![] }, &c, &mut |_, _| {});
+        assert_eq!(names(&res), ["a.jpg"]);
+        // the 2.x entry point still only returns images / videos
+        let res = scan(r, true, &["jpg".into(), "mp3".into(), "mp4".into()], &c, &mut |_, _| {});
+        assert_eq!(names(&res), ["a.jpg", "blocked/d.jpg", "blocked/deep/e.jpg", "sub/b.mp4"]);
     }
 }

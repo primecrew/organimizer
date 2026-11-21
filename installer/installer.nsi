@@ -1,4 +1,4 @@
-; PhotoSorter Windows installer (NSIS 3, cross-built on Linux with makensis).
+; PrimeCrew Organimizer Windows installer (NSIS 3, cross-built on Linux with makensis).
 ; Modelled on the Encode FFS installer (same layout, brand folder and modes).
 ; All identity values come from scripts/build-release.sh (-D...).
 ;
@@ -7,8 +7,15 @@
 ; - Start Menu shortcut under <PUBLISHER>\<APP_NAME> (default on), desktop shortcut (optional)
 ; - Listed in Add/Remove Programs (HKCU or HKLM ...\Uninstall\<APP_ID>)
 ; - A later setup finds that entry and upgrades in place (same folder and mode, who/where
-;   pages skipped); old shortcuts are replaced, never duplicated. If PhotoSorter is running,
+;   pages skipped); old shortcuts are replaced, never duplicated. If the app is running,
 ;   setup asks you to close it first.
+; - 3.0 rename: an installed PhotoSorter (2.x, <LEGACY_ID> uninstall entry) counts as an
+;   upgrade. The banner reads "Updating existing installation: PhotoSorter v2.0.5 →
+;   PrimeCrew Organimizer v3.0.0"; Organimizer goes next to it (...\PhotoSorter →
+;   ...\Organimizer, same mode). After the new files are in place setup removes only
+;   PhotoSorter's own program files, its Start Menu / desktop shortcuts and its Add/Remove
+;   entry. PhotoSorter.ini, presets, undo logs and photos are never deleted; the app imports
+;   the old settings on first start and leaves the old file as it is.
 ; - Shared PrimeCrew setup look (same on every PrimeCrew installer):
 ;     upgrade: first page and Ready page start with the banner
 ;              "Updating existing installation: <App> v<old> → v<new>", then
@@ -16,11 +23,11 @@
 ;     fresh:   title "New installation"; the folder page is labelled "Install to:" (editable,
 ;              Browse); the Ready page repeats "New installation" / "Install to: <path>"
 ;     finish:  "Updated to v<new> in <path>"  or  "Installed v<new> to <path>"
-; - Writes <MARKER> next to the exe so the app keeps PhotoSorter.ini in
-;   %APPDATA%\<PUBLISHER>\<APP_NAME> (Program Files is not writable)
+; - Writes <MARKER> next to the exe so the app keeps <INI_NAME> in
+;   %APPDATA%\<PUBLISHER>\<APP_SHORT> (Program Files is not writable)
 ; - Uninstall removes only the files setup installed and the shortcuts; the brand Start Menu
 ;   folder only if it is empty (other PrimeCrew apps keep theirs). Settings, presets, undo logs
-;   and photos are never deleted.
+;   and your files are never deleted.
 ; Silent: setup.exe /S [/ALLUSERS] [/DESKTOP] [/D=path]   uninstall.exe /S [/ALLUSERS]
 
 Unicode true
@@ -31,6 +38,10 @@ Target amd64-unicode
 !ifndef PUBLISHER
   !error "Build with scripts/build-release.sh (PUBLISHER is required)"
 !endif
+!ifndef LEGACY_ID
+  !error "Build with scripts/build-release.sh (LEGACY_* values are required)"
+!endif
+!define SETTINGS_DIR "%APPDATA%\${PUBLISHER}\${APP_SHORT}"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -56,6 +67,7 @@ VIAddVersionKey "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey "LegalCopyright" "Copyright (C) 2026 ${PUBLISHER}. GPL v3 or later."
 
 !define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_ID}"
+!define LEGACY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${LEGACY_ID}"
 
 Var AllUsers        ; 1 = for everyone (HKLM, Program Files)
 Var RadioMe
@@ -70,12 +82,14 @@ Var FinishMsg
 Var Banner          ; "Updating existing installation: ..." or "New installation"
 Var PathLabel       ; "Installed in:" or "Install to:"
 Var BannerFont
+Var Legacy          ; 1 = the existing install is the old ${LEGACY_NAME}
+Var LegacyDir       ; its folder
 
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
 !define MUI_COMPONENTSPAGE_SMALLDESC
-!define ABOUT_TEXT "${APP_NAME} renames and sorts photos and videos into date folders. It always shows a preview first, never overwrites or deletes files, and every run can be undone."
+!define ABOUT_TEXT "${APP_NAME} renames and sorts files into date folders and organizes movies and TV shows for Plex. It always shows a preview first, never overwrites or deletes files, and every run can be undone."
 ; Title and text are set at run time (.onInit / FinishPre): upgrade banner or "New installation"
 !define MUI_WELCOMEPAGE_TITLE "$WelcomeTitle"
 !define MUI_WELCOMEPAGE_TITLE_3LINES
@@ -99,7 +113,7 @@ Page custom ReadyPage
 !define MUI_PAGE_CUSTOMFUNCTION_PRE FinishPre
 !insertmacro MUI_PAGE_FINISH
 
-!define MUI_UNCONFIRMPAGE_TEXT_TOP "${APP_NAME} will be removed from the folder below. Your photos, undo logs, settings and presets (%APPDATA%\${PUBLISHER}\${APP_NAME}) are not touched."
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "${APP_NAME} will be removed from the folder below. Your files, undo logs, settings and presets (${SETTINGS_DIR}) are not touched."
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
@@ -153,11 +167,67 @@ Function DetectExistingInstall
       Return
     ${EndIf}
   ${EndIf}
+  Call DetectLegacyInstall
+FunctionEnd
+
+Function DetectLegacyInstall
+  ; The old ${LEGACY_NAME} (2.x): same order (HKCU unless /ALLUSERS, then HKLM).
+  ${If} $AllUsers != 1
+    ClearErrors
+    ReadRegStr $0 HKCU "${LEGACY_KEY}" "InstallLocation"
+    ${If} $0 != ""
+      Call TrimDir
+      ${If} ${FileExists} "$0\${LEGACY_EXE}"
+        ReadRegStr $InstalledVersion HKCU "${LEGACY_KEY}" "DisplayVersion"
+        StrCpy $AllUsers 0
+        Goto DetectLegacy_Found
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ClearErrors
+  ReadRegStr $0 HKLM "${LEGACY_KEY}" "InstallLocation"
+  ${If} $0 != ""
+    Call TrimDir
+    ${If} ${FileExists} "$0\${LEGACY_EXE}"
+      ReadRegStr $InstalledVersion HKLM "${LEGACY_KEY}" "DisplayVersion"
+      StrCpy $AllUsers 1
+      Goto DetectLegacy_Found
+    ${EndIf}
+  ${EndIf}
+  Return
+  DetectLegacy_Found:
+  StrCpy $LegacyDir $0
+  StrCpy $Legacy 1
+  StrCpy $Upgrade 1
+  ; ...\PhotoSorter -> ...\Organimizer (same parent); a folder with another name is reused
+  ${GetFileName} $0 $1
+  ${GetParent} $0 $2
+  ${If} $1 == "${LEGACY_DIRNAME}"
+  ${AndIf} $2 != ""
+    StrCpy $INSTDIR "$2\${APP_DIRNAME}"
+  ${Else}
+    StrCpy $INSTDIR $0
+  ${EndIf}
 FunctionEnd
 
 Function SetModeTexts
   ; Shared PrimeCrew look. $INSTDIR is final on an upgrade (it never moves).
   ${If} $Upgrade == 1
+  ${AndIf} $Legacy == 1
+    ${If} $InstalledVersion == ""
+      StrCpy $Banner "Updating existing installation: ${LEGACY_NAME} → ${APP_NAME} v${APP_VERSION}"
+    ${Else}
+      StrCpy $Banner "Updating existing installation: ${LEGACY_NAME} v$InstalledVersion → ${APP_NAME} v${APP_VERSION}"
+    ${EndIf}
+    StrCpy $PathLabel "Installs to:"
+    StrCpy $WelcomeTitle "$Banner"
+    ${If} $AllUsers == 1
+      StrCpy $1 "for everyone on this PC"
+    ${Else}
+      StrCpy $1 "just for you"
+    ${EndIf}
+    StrCpy $WelcomeMsg "${LEGACY_NAME} is now ${APP_NAME}.$\r$\n$\r$\n$PathLabel$\r$\n$INSTDIR$\r$\n($1)$\r$\n$\r$\nAfterwards setup removes the old ${LEGACY_NAME} program from $LegacyDir with its shortcut and Add/Remove entry. Your settings and presets are taken over on first start (the old ${LEGACY_INI} is kept); your files and undo logs are not touched."
+  ${ElseIf} $Upgrade == 1
     ${If} $InstalledVersion == ""
       StrCpy $Banner "Updating existing installation: ${APP_NAME} (version unknown) → v${APP_VERSION}"
     ${Else}
@@ -170,12 +240,12 @@ Function SetModeTexts
     ${Else}
       StrCpy $1 "just for you"
     ${EndIf}
-    StrCpy $WelcomeMsg "$PathLabel$\r$\n$INSTDIR$\r$\n$\r$\nThe update stays in this folder ($1). Your settings, presets and undo logs are kept, and your photos are not touched.$\r$\n$\r$\n${ABOUT_TEXT}"
+    StrCpy $WelcomeMsg "$PathLabel$\r$\n$INSTDIR$\r$\n$\r$\nThe update stays in this folder ($1). Your settings, presets and undo logs are kept, and your files are not touched.$\r$\n$\r$\n${ABOUT_TEXT}"
   ${Else}
     StrCpy $Banner "New installation"
     StrCpy $PathLabel "Install to:"
     StrCpy $WelcomeTitle "New installation"
-    StrCpy $WelcomeMsg "This installs ${APP_NAME} v${APP_VERSION} by ${PUBLISHER}.$\r$\n$\r$\n${ABOUT_TEXT}$\r$\n$\r$\nYou can choose who gets it and where it goes on the next pages. Settings and presets are kept in %APPDATA%\${PUBLISHER}\${APP_NAME}."
+    StrCpy $WelcomeMsg "This installs ${APP_NAME} v${APP_VERSION} by ${PUBLISHER}.$\r$\n$\r$\n${ABOUT_TEXT}$\r$\n$\r$\nYou can choose who gets it and where it goes on the next pages. Settings and presets are kept in ${SETTINGS_DIR}."
   ${EndIf}
 FunctionEnd
 
@@ -187,13 +257,25 @@ Function DirectoryPagePre
 FunctionEnd
 
 Function ExeIsInUse
-  ; 1 if a PhotoSorter window is open (winit's window class + the app title; an Explorer
-  ; window on a folder named PhotoSorter has another class), or the installed exe cannot be
-  ; opened exclusively (it is running)
+  ; 1 if an app window is open (winit's window class + the app title; an Explorer window on
+  ; a folder with that name has another class), or the installed exe (or the old
+  ; ${LEGACY_EXE} being replaced) cannot be opened exclusively (it is running)
   FindWindow $0 "Window Class" "${APP_NAME}"
   ${If} $0 != 0
     Push 1
     Return
+  ${EndIf}
+  ${If} $Legacy == 1
+    FindWindow $0 "Window Class" "${LEGACY_NAME}"
+    ${If} $0 != 0
+      Push 1
+      Return
+    ${EndIf}
+    System::Call 'kernel32::CreateFileW(w "$LegacyDir\${LEGACY_EXE}", i 0x80000000, i 0, p 0, i 3, i 0, p 0) p .r0'
+    StrCmp $0 "-1" ExeIsInUse_Yes
+    StrCmp $0 "0xFFFFFFFF" ExeIsInUse_Yes
+    StrCmp $0 "0xFFFFFFFFFFFFFFFF" ExeIsInUse_Yes
+    System::Call 'kernel32::CloseHandle(p r0)'
   ${EndIf}
   ${IfNot} ${FileExists} "$INSTDIR\${APP_EXE}"
     Push 0
@@ -219,9 +301,9 @@ Function CheckAppNotRunning
   ${EndIf}
   ${If} ${Silent}
     SetErrorLevel 1618
-    Abort "${APP_NAME} is running. Close it and run setup again."
+    Abort "${APP_NAME} (or ${LEGACY_NAME}) is running. Close it and run setup again."
   ${EndIf}
-  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${APP_NAME} is running.$\r$\n$\r$\nPlease close it and click Retry to continue, or Cancel to stop setup." IDRETRY CheckAppNotRunning_Retry
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${APP_NAME} (or ${LEGACY_NAME}) is running.$\r$\n$\r$\nPlease close it and click Retry to continue, or Cancel to stop setup." IDRETRY CheckAppNotRunning_Retry
   Abort
 FunctionEnd
 
@@ -304,7 +386,7 @@ Section "${APP_NAME} (required)" SecApp
   File "/oname=THIRD-PARTY-NOTICES.txt" "${DOC_DIR}\THIRD-PARTY-NOTICES.txt"
   ; tells the app it is installed: settings go to %APPDATA%, not next to the exe
   FileOpen $0 "$INSTDIR\${MARKER}" w
-  FileWrite $0 "Installed by setup. ${APP_NAME} keeps PhotoSorter.ini (settings, presets, window layout) in %APPDATA%\${PUBLISHER}\${APP_NAME}.$\r$\n"
+  FileWrite $0 "Installed by setup. ${APP_NAME} keeps ${INI_NAME} (settings, presets, window layout) in ${SETTINGS_DIR}.$\r$\n"
   FileClose $0
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -338,7 +420,34 @@ Section "${APP_NAME} (required)" SecApp
     WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
     WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" $3
   ${EndIf}
+  ${If} $Legacy == 1
+    Call RemoveLegacy
+  ${EndIf}
 SectionEnd
+
+Function RemoveLegacy
+  ; The new program is in place: remove what the ${LEGACY_NAME} setup installed (its files,
+  ; shortcuts and Add/Remove entry). Never its settings, presets, undo logs or your files.
+  DetailPrint "Removing the old ${LEGACY_NAME} program from $LegacyDir"
+  Delete "$LegacyDir\${LEGACY_EXE}"
+  Delete "$LegacyDir\${LEGACY_MARKER}"
+  ${If} $LegacyDir != $INSTDIR
+    Delete "$LegacyDir\README.txt"
+    Delete "$LegacyDir\HELP.md"
+    Delete "$LegacyDir\LICENSE"
+    Delete "$LegacyDir\THIRD-PARTY-NOTICES.txt"
+    Delete "$LegacyDir\uninstall.exe"
+    RMDir "$LegacyDir" ; only if empty: anything else there stays
+  ${EndIf}
+  Delete "$SMPROGRAMS\${PUBLISHER}\${LEGACY_NAME}.lnk"
+  Delete "$SMPROGRAMS\${LEGACY_NAME}.lnk"
+  Delete "$DESKTOP\${LEGACY_NAME}.lnk"
+  ${If} $AllUsers == 1
+    DeleteRegKey HKLM "${LEGACY_KEY}"
+  ${Else}
+    DeleteRegKey HKCU "${LEGACY_KEY}"
+  ${EndIf}
+FunctionEnd
 
 Section "Start Menu shortcut" SecStart
   !insertmacro SetMode
@@ -368,19 +477,33 @@ Function ReadyPage
   ${If} $0 == error
     Abort
   ${EndIf}
-  CreateFont $BannerFont "$(^Font)" 10 700
-  ${NSD_CreateLabel} 0 0 100% 22u "  $Banner"
-  Pop $1
-  ${NSD_AddStyle} $1 ${SS_CENTERIMAGE} ; one line, vertically centred in the coloured band
+  ${If} $Legacy == 1
+    ; "PhotoSorter v2.0.5 → PrimeCrew Organimizer v3.0.0" is longer: two lines
+    CreateFont $BannerFont "$(^Font)" 9 700
+    ${NSD_CreateLabel} 0 0 100% 26u "$Banner"
+    Pop $1
+  ${Else}
+    CreateFont $BannerFont "$(^Font)" 10 700
+    ${NSD_CreateLabel} 0 0 100% 22u "  $Banner"
+    Pop $1
+    ${NSD_AddStyle} $1 ${SS_CENTERIMAGE} ; one line, vertically centred in the coloured band
+  ${EndIf}
   SendMessage $1 ${WM_SETFONT} $BannerFont 1
   ${If} $Upgrade == 1
     SetCtlColors $1 0x000000 0xFFF2CC ; pale amber: updating
   ${Else}
     SetCtlColors $1 0x000000 0xDDEBF7 ; pale blue: new
   ${EndIf}
-  ${NSD_CreateLabel} 0 30u 100% 10u "$PathLabel"
+  ${If} $Legacy == 1
+    StrCpy $4 4 ; the two-line banner pushes everything down a little
+  ${Else}
+    StrCpy $4 0
+  ${EndIf}
+  IntOp $5 30 + $4
+  ${NSD_CreateLabel} 0 $5u 100% 10u "$PathLabel"
   Pop $1
-  ${NSD_CreateLabel} 8u 41u 97% 20u "$INSTDIR"
+  IntOp $5 41 + $4
+  ${NSD_CreateLabel} 8u $5u 97% 20u "$INSTDIR"
   Pop $1
   ${If} $AllUsers == 1
     StrCpy $2 "Everyone on this PC (Program Files)"
@@ -398,10 +521,12 @@ Function ReadyPage
   ${Else}
     StrCpy $3 "$3$\r$\nDesktop: no shortcut"
   ${EndIf}
-  ${NSD_CreateLabel} 0 66u 100% 40u "Installed for: $2$\r$\n$3$\r$\nSettings and presets: %APPDATA%\${PUBLISHER}\${APP_NAME}"
+  ${NSD_CreateLabel} 0 66u 100% 38u "Installed for: $2$\r$\n$3$\r$\nSettings and presets: ${SETTINGS_DIR}"
   Pop $1
-  ${If} $Upgrade == 1
-    ${NSD_CreateLabel} 0 110u 100% 24u "Click Install to update. Your settings, presets, undo logs and photos are kept."
+  ${If} $Legacy == 1
+    ${NSD_CreateLabel} 0 104u 100% 34u "Click Install to update. Then the old ${LEGACY_NAME} program, its shortcut and its Add/Remove entry are removed from $LegacyDir. Your settings, presets, undo logs and files are kept."
+  ${ElseIf} $Upgrade == 1
+    ${NSD_CreateLabel} 0 110u 100% 24u "Click Install to update. Your settings, presets, undo logs and files are kept."
   ${Else}
     ${NSD_CreateLabel} 0 110u 100% 24u "Click Install to start."
   ${EndIf}
@@ -412,7 +537,10 @@ Function ReadyPage
 FunctionEnd
 
 Function FinishPre
-  ${If} $Upgrade == 1
+  ${If} $Legacy == 1
+    StrCpy $FinishTitle "${APP_NAME} is installed"
+    StrCpy $FinishMsg "Updated from ${LEGACY_NAME} v$InstalledVersion to v${APP_VERSION} in $INSTDIR$\r$\n$\r$\nOld ${LEGACY_NAME} removed; settings follow on first start."
+  ${ElseIf} $Upgrade == 1
     StrCpy $FinishTitle "${APP_NAME} is up to date"
     StrCpy $FinishMsg "Updated to v${APP_VERSION} in $INSTDIR$\r$\n$\r$\nYour settings, presets and undo logs were kept."
   ${Else}
@@ -425,6 +553,8 @@ Function .onInit
   StrCpy $AllUsers 0
   StrCpy $WantDesktop 0
   StrCpy $Upgrade 0
+  StrCpy $Legacy 0
+  StrCpy $LegacyDir ""
   StrCpy $InstalledVersion ""
   StrCpy $WelcomeMsg ""
   ${GetParameters} $R0
@@ -463,6 +593,10 @@ Function .onInit
     ${If} ${FileExists} "$DESKTOP\${APP_NAME}.lnk"
       StrCpy $WantDesktop 1
     ${EndIf}
+    ${If} $Legacy == 1
+    ${AndIf} ${FileExists} "$DESKTOP\${LEGACY_NAME}.lnk"
+      StrCpy $WantDesktop 1
+    ${EndIf}
   ${EndIf}
   ${If} $WantDesktop == 1
     SectionGetFlags ${SecDesktop} $0
@@ -495,7 +629,7 @@ Section "un.${APP_NAME}" UnSecApp
   RMDir "$SMPROGRAMS\${PUBLISHER}" ; only if empty: other PrimeCrew apps keep the folder
   Delete "$SMPROGRAMS\${APP_NAME}.lnk"
   Delete "$DESKTOP\${APP_NAME}.lnk"
-  ; only the files setup installed (never settings, presets, undo logs or photos)
+  ; only the files setup installed (never settings, presets, undo logs or your files)
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\README.txt"
   Delete "$INSTDIR\HELP.md"

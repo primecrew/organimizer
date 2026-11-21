@@ -142,7 +142,7 @@ fn template_uses_day(template: &str) -> bool {
 }
 
 /// Returns true if `folder_name` is exactly what `template` would produce for
-/// *some* plausible date (used to recognise folders that PhotoSorter, or the
+/// *some* plausible date (used to recognise folders that Organimizer (or PhotoSorter), or the
 /// user, already created). Case-insensitive, as Windows is.
 pub fn is_sorted_folder_name(template: &str, folder_name: &str) -> bool {
     let target = folder_name.to_lowercase();
