@@ -6,8 +6,8 @@ before merging, tagging or releasing.
 
 ## Automated
 
-- `cargo test --no-default-features`: 159 tests pass:
-  - 152 unit tests (Plex name parser, per-file recognition and Why text,
+- `cargo test --no-default-features`: 160 tests pass:
+  - 153 unit tests (Plex name parser, per-file recognition and Why text,
     disc rips and runtime rules, media duration from MP4/MKV/AVI headers,
     TMDB lookup grouping / query building / episode mapping / reassign /
     apply, the type-the-name prompt (low confidence and zero results,
@@ -67,7 +67,7 @@ before merging, tagging or releasing.
 
 | Test | Result |
 |---|---|
-| `cargo test --no-default-features` (159 tests, including low-confidence / zero-results / override query / invalid year / cancel-changes-nothing lookup tests) | OK |
+| `cargo test --no-default-features` (160 tests, including official stacked-file / numbered-extras / date-based Season NN tests, and the type-the-name prompt tests) | OK |
 | Wine lookup flow against the local mock TMDB: results picker, **Search for something else...**, type-the-name prompt, Esc leaves the preview unchanged, then the usual This one / OK / Apply path | OK (screenshot `lookup-manual-search.png`) |
 
 ## Known limitations of this test run
@@ -86,7 +86,7 @@ before merging, tagging or releasing.
   and the whole lookup flow ran against a local mock server serving
   hand-written fixtures in TMDB's format.
 - The exe and setup are unsigned: Windows SmartScreen will warn on first
-  start. Check the SHA-256 against `Organimizer-v3.0.4-SHA256SUMS.txt` (earlier sums remain in the 3.0.0, 3.0.1, 3.0.2 and 3.0.3 SHA256SUMS files).
+  start. Check the SHA-256 against `Organimizer-v3.0.5-SHA256SUMS.txt` (earlier sums remain in the 3.0.0, 3.0.1, 3.0.2, 3.0.3 and 3.0.4 SHA256SUMS files).
 
 Screenshots: `docs/v3/screenshots/`.
 
