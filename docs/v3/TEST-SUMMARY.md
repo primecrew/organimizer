@@ -1,4 +1,4 @@
-# Organimizer 3.0.3 - test summary
+# Organimizer 3.0.4 - test summary
 
 Branch `v3-organimizer`, not released. All tests below ran on Linux with
 **Wine** (no real Windows machine was available), so please test on Windows
@@ -6,11 +6,13 @@ before merging, tagging or releasing.
 
 ## Automated
 
-- `cargo test --no-default-features`: 154 tests pass:
-  - 147 unit tests (Plex name parser, per-file recognition and Why text,
+- `cargo test --no-default-features`: 159 tests pass:
+  - 152 unit tests (Plex name parser, per-file recognition and Why text,
     disc rips and runtime rules, media duration from MP4/MKV/AVI headers,
     TMDB lookup grouping / query building / episode mapping / reassign /
-    apply and JSON parsing against hand-written fixtures in
+    apply, the type-the-name prompt (low confidence and zero results,
+    override query with year and type, invalid year rejected, cancel
+    changes nothing) and JSON parsing against hand-written fixtures in
     `tests/fixtures/tmdb`, extras/subtitle linking, blacklist, protected
     file types, favorites, settings migration, plus all 2.x tests);
   - `tests/near_miss.rs`: 111 "almost named right" inputs with the exact
@@ -61,6 +63,13 @@ before merging, tagging or releasing.
 |---|---|
 | Silent install (`Organimizer-v3.0.3-setup.exe /S`) into a new prefix | OK: `LICENSE` and `COPYRIGHT` in `%LOCALAPPDATA%\Programs\Organimizer`; installed `LICENSE` is byte-identical to `origin/master:LICENSE`; `COPYRIGHT` matches the repo file |
 
+## 3.0.4 Wine smoke (own Xvfb display and Wine prefix)
+
+| Test | Result |
+|---|---|
+| `cargo test --no-default-features` (159 tests, including low-confidence / zero-results / override query / invalid year / cancel-changes-nothing lookup tests) | OK |
+| Wine lookup flow against the local mock TMDB: results picker, **Search for something else...**, type-the-name prompt, Esc leaves the preview unchanged, then the usual This one / OK / Apply path | OK (screenshot `lookup-manual-search.png`) |
+
 ## Known limitations of this test run
 
 
@@ -77,6 +86,6 @@ before merging, tagging or releasing.
   and the whole lookup flow ran against a local mock server serving
   hand-written fixtures in TMDB's format.
 - The exe and setup are unsigned: Windows SmartScreen will warn on first
-  start. Check the SHA-256 against `Organimizer-v3.0.3-SHA256SUMS.txt` (earlier sums remain in the 3.0.0, 3.0.1 and 3.0.2 SHA256SUMS files).
+  start. Check the SHA-256 against `Organimizer-v3.0.4-SHA256SUMS.txt` (earlier sums remain in the 3.0.0, 3.0.1, 3.0.2 and 3.0.3 SHA256SUMS files).
 
 Screenshots: `docs/v3/screenshots/`.

@@ -13,7 +13,7 @@
 //! the feature can be removed by deleting this module and its three calls.
 
 use super::*;
-use organimizer::lookup::{self, Group, GroupKind, MatchSet, Target};
+use organimizer::lookup::{self, Group, GroupKind, ManualQuery, MatchSet, Target};
 use organimizer::plex::{self, Kind};
 use organimizer::tmdb::{self, Episode, Match, MovieDetails, SearchKind, TvDetails};
 use std::collections::{HashMap, HashSet};
@@ -45,6 +45,18 @@ struct Picker {
     year: String,
     results: Option<Result<Vec<Match>, String>>,
     ticket: u64,
+    /// Already auto-opened the name prompt for an empty result list.
+    empty_prompted: bool,
+}
+
+/// "Type the name" prompt: shown when confidence is not High, when TMDB
+/// returns no matches, or when the user clicks Search for something else...
+struct ManualPrompt {
+    group: Group,
+    title: String,
+    year: String,
+    kind: SearchKind,
+    error: String,
 }
 
 struct Matcher {
@@ -69,6 +81,11 @@ pub(super) struct LookupState {
     shows: HashMap<(u64, u32), (TvDetails, Vec<Episode>)>,
     posters: HashMap<String, Poster>,
     pending: HashSet<u64>,
+    /// Typed title/year/type remembered per folder for this session.
+    overrides: lookup::SessionOverrides,
+    manual: Option<ManualPrompt>,
+    /// Request focus in the title box the first frame the prompt is open.
+    manual_focus: bool,
     pub status: String,
 }
 
@@ -88,6 +105,9 @@ impl Default for LookupState {
             shows: HashMap::new(),
             posters: HashMap::new(),
             pending: HashSet::new(),
+            overrides: lookup::SessionOverrides::default(),
+            manual: None,
+            manual_focus: false,
             status: String::new(),
         }
     }
@@ -204,6 +224,7 @@ impl App {
         let p = self.lookup.picker.as_mut().unwrap();
         p.ticket = ticket;
         p.results = None;
+        p.empty_prompted = false;
         let tx = self.lookup.tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -230,16 +251,42 @@ impl App {
     }
 
     fn lookup_open(&mut self, ctx: &egui::Context, group: Group) {
-        let (kind, query, year) = group.query();
+        let key = lookup::override_key(&self.plex.rows, &group);
+        if let Some(q) = self.lookup.overrides.get(&key).cloned() {
+            self.lookup_open_picker(ctx, group, q);
+            return;
+        }
+        let guess = ManualQuery::from_group(&group);
+        // Confidence below High (Medium or Low): ask for the name first.
+        if lookup::needs_name_prompt(lookup::group_confidence(&self.plex.rows, &group)) {
+            self.lookup_open_prompt(group, guess);
+            return;
+        }
+        self.lookup_open_picker(ctx, group, guess);
+    }
+
+    fn lookup_open_picker(&mut self, ctx: &egui::Context, group: Group, q: ManualQuery) {
         self.lookup.picker = Some(Picker {
             group,
-            kind,
-            query,
-            year: year.map(|y| y.to_string()).unwrap_or_default(),
+            kind: q.kind,
+            query: q.title,
+            year: q.year.map(|y| y.to_string()).unwrap_or_default(),
             results: None,
             ticket: 0,
+            empty_prompted: false,
         });
         self.lookup_search(ctx);
+    }
+
+    fn lookup_open_prompt(&mut self, group: Group, q: ManualQuery) {
+        self.lookup.manual = Some(ManualPrompt {
+            group,
+            title: q.title,
+            year: q.year.map(|y| y.to_string()).unwrap_or_default(),
+            kind: q.kind,
+            error: String::new(),
+        });
+        self.lookup.manual_focus = true;
     }
 
     fn lookup_details(&mut self, ctx: &egui::Context, group: Group, kind: SearchKind, chosen: Match) {
@@ -346,8 +393,30 @@ impl App {
 
     /// The results and match windows (call every frame).
     pub(super) fn lookup_windows(&mut self, ctx: &egui::Context) {
+        self.lookup_maybe_empty_prompt();
         self.lookup_picker_window(ctx);
+        self.lookup_manual_window(ctx);
         self.lookup_match_window(ctx);
+    }
+
+    /// When a search comes back with no matches, open the name prompt once.
+    fn lookup_maybe_empty_prompt(&mut self) {
+        if self.lookup.manual.is_some() {
+            return;
+        }
+        let Some(p) = self.lookup.picker.as_mut() else { return };
+        if p.empty_prompted {
+            return;
+        }
+        let Some(res) = &p.results else { return };
+        if !lookup::results_need_name_prompt(res) {
+            return;
+        }
+        p.empty_prompted = true;
+        let year = lookup::parse_manual_year(&p.year).ok().flatten().or_else(|| p.year.trim().parse().ok());
+        let q = ManualQuery { title: p.query.clone(), year, kind: p.kind };
+        let group = p.group.clone();
+        self.lookup_open_prompt(group, q);
     }
 
     fn lookup_picker_window(&mut self, ctx: &egui::Context) {
@@ -356,6 +425,7 @@ impl App {
         let mut research = false;
         let mut chosen: Option<Match> = None;
         let mut close = false;
+        let mut something_else = false;
         let mut want_posters: Vec<String> = vec![];
         let posters: HashMap<String, egui::TextureHandle> = self
             .lookup
@@ -444,6 +514,10 @@ impl App {
                 }
             }
             ui.add_space(6.0);
+            ui.add_space(4.0);
+            if ui.button("Search for something else...").clicked() {
+                something_else = true;
+            }
             ui.horizontal(|ui| {
                 if ui.button("Cancel").clicked() {
                     close = true;
@@ -453,7 +527,10 @@ impl App {
         });
         let kind = p.kind;
         let group = p.group.clone();
-        if chosen.is_none() && !close && !m.should_close() {
+        // When the type-the-name prompt is on top, Esc must close only that
+        // prompt; keep the results picker as it is.
+        let dismiss = close || (m.should_close() && self.lookup.manual.is_none());
+        if chosen.is_none() && !dismiss {
             self.lookup.picker = Some(p);
         }
         for pp in want_posters {
@@ -462,9 +539,97 @@ impl App {
         if research {
             self.lookup_search(ctx);
         }
+        if something_else && let Some(p) = self.lookup.picker.as_ref() {
+            let year = lookup::parse_manual_year(&p.year).ok().flatten().or_else(|| p.year.trim().parse().ok());
+            let q = ManualQuery { title: p.query.clone(), year, kind: p.kind };
+            let group = p.group.clone();
+            self.lookup_open_prompt(group, q);
+        }
         if let Some(c) = chosen {
             self.lookup_details(ctx, group, kind, c);
         }
+    }
+
+    fn lookup_manual_window(&mut self, ctx: &egui::Context) {
+        let Some(mut p) = self.lookup.manual.take() else { return };
+        let fs = self.s.font_size;
+        let mut go = false;
+        let mut cancel = false;
+        let focus = self.lookup.manual_focus;
+        let modal = egui::Modal::new(egui::Id::unique("lookup-manual")).show(ctx, |ui| {
+            // Consume Esc before the title box can eat it (the box is focused).
+            if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                cancel = true;
+            }
+            ui.set_width((fs * 32.0).min(ctx.content_rect().width() - 40.0));
+            ui.heading("Type the name");
+            ui.label("The filename may not be a good search. Type the movie or TV show name, and a 4-digit year if you know it.");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut p.kind, SearchKind::Movie, "Movie");
+                ui.selectable_value(&mut p.kind, SearchKind::Tv, "TV show");
+            });
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                let r = ui.add(
+                    egui::TextEdit::singleline(&mut p.title)
+                        .id_salt("lookup-manual-title")
+                        .desired_width(fs * 18.0)
+                        .hint_text("Movie or TV show name"),
+                );
+                if focus {
+                    r.request_focus();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Year");
+                let _ = ui.add(
+                    egui::TextEdit::singleline(&mut p.year)
+                        .id_salt("lookup-manual-year")
+                        .desired_width(fs * 5.0)
+                        .hint_text("optional"),
+                );
+                ui.label(RichText::new(format!("empty, or 4 digits from {} to {}", lookup::MIN_SEARCH_YEAR, lookup::max_search_year())).weak().small());
+            });
+            if !p.error.is_empty() {
+                ui.label(RichText::new(&p.error).color(red()));
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Search").clicked() {
+                    go = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                go = true;
+            }
+        });
+        self.lookup.manual_focus = false;
+        if modal.should_close() {
+            cancel = true;
+        }
+        if go {
+            match lookup::manual_query(&p.title, &p.year, p.kind) {
+                Ok(q) => {
+                    let key = lookup::override_key(&self.plex.rows, &p.group);
+                    self.lookup.overrides.remember(key, q.clone());
+                    self.lookup_open_picker(ctx, p.group, q);
+                    return;
+                }
+                Err(e) => {
+                    p.error = e;
+                    cancel = false;
+                }
+            }
+        }
+        if !cancel {
+            self.lookup.manual = Some(p);
+        }
+        // Cancel: drop the prompt. The results picker, if open, stays as it is.
+        // If the picker was never opened, the preview is unchanged.
     }
 
     fn lookup_match_window(&mut self, ctx: &egui::Context) {
@@ -605,7 +770,7 @@ impl App {
         } else if back {
             let (kind, group) = (m.kind, m.group.clone());
             let query = m.chosen.title.clone();
-            self.lookup.picker = Some(Picker { group, kind, query, year: String::new(), results: None, ticket: 0 });
+            self.lookup.picker = Some(Picker { group, kind, query, year: String::new(), results: None, ticket: 0, empty_prompted: false });
             self.lookup_search(ctx);
         } else if !close && !modal.should_close() {
             self.lookup.matcher = Some(m);

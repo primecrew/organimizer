@@ -4,6 +4,19 @@ All versions are Windows 10/11 builds (portable exe; from 2.0.5 also an
 installer). None of them is code-signed, and so far they have been tested on
 Linux and under Wine only, not on a real Windows PC.
 
+## 3.0.4 – type the name when TMDB lookup is unsure (branch `v3-organimizer`, not released yet)
+- On the Plex tab, Look up asks you to type the movie or TV show name (and
+  an optional 4-digit year) when the filename confidence is not High
+  (Medium or Low) or when TMDB returns no matches. Movie / TV show is
+  pre-filled from what was detected. The results window also has
+  **Search for something else...** at any time. Enter searches, Esc
+  cancels and leaves the preview unchanged. A typed name is remembered
+  for that folder until the app is closed. Matching still goes through
+  the usual preview, then Apply and Undo; nothing is renamed from the
+  prompt.
+- Installer `Organimizer-v3.0.4-setup.exe` and portable zip
+  `Organimizer-v3.0.4-win64.zip`.
+
 ## 3.0.3 – LICENSE is the official GPL v3 text; COPYRIGHT file (branch `v3-organimizer`, not released yet)
 - `LICENSE` is once again the unmodified official GNU GPL v3 text
   (byte-identical to `origin/master` and gnu.org `gpl-3.0.txt`), so GitHub

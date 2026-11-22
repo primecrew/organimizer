@@ -182,6 +182,124 @@ pub fn group_of(groups: &[Group], row: usize) -> Option<usize> {
     groups.iter().position(|g| g.rows().any(|r| r == row))
 }
 
+
+/// A group's lookup confidence is "high" only when at least one
+/// title-bearing file (the movie, or an episode) was recognized with
+/// [`Confidence::High`]. Medium and Low are "not high": the filename may be
+/// a poor TMDB query, so the user is asked to type the name first.
+///
+/// Extras and subtitles are ignored (they often have weaker names). If the
+/// group has no movie/episode files, the best extra is used, otherwise Low.
+pub fn group_confidence(rows: &[Row], group: &Group) -> Confidence {
+    let ids = if !group.main.is_empty() {
+        &group.main
+    } else if !group.episodes.is_empty() {
+        &group.episodes
+    } else {
+        &group.extras
+    };
+    ids.iter().filter_map(|&i| rows.get(i).map(|r| r.analysis.confidence)).max().unwrap_or(Confidence::Low)
+}
+
+/// True when the group's recognition is not [`Confidence::High`] (i.e.
+/// Medium or Low). That is the threshold for the "type the name" prompt.
+pub fn needs_name_prompt(confidence: Confidence) -> bool {
+    confidence < Confidence::High
+}
+
+/// True when a finished search came back with no matches (errors are
+/// shown in the results window instead; they do not open the prompt).
+pub fn results_need_name_prompt(results: &Result<Vec<crate::tmdb::Match>, String>) -> bool {
+    matches!(results, Ok(list) if list.is_empty())
+}
+
+/// Earliest 4-digit year accepted in the manual search prompt.
+pub const MIN_SEARCH_YEAR: u16 = 1870;
+
+/// Latest accepted year: next calendar year (same rule as [`crate::max_year`]).
+pub fn max_search_year() -> u16 {
+    crate::max_year() as u16
+}
+
+/// A title, optional year and Movie / TV choice the user typed (or a
+/// remembered override for the folder).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualQuery {
+    pub title: String,
+    pub year: Option<u16>,
+    pub kind: crate::tmdb::SearchKind,
+}
+
+impl ManualQuery {
+    /// Prefill from what the filenames/folders suggested.
+    pub fn from_group(group: &Group) -> Self {
+        let (kind, title, year) = group.query();
+        ManualQuery { title, year, kind }
+    }
+
+    /// What [`crate::tmdb::search`] should be called with.
+    pub fn search_parts(&self) -> (crate::tmdb::SearchKind, String, Option<u16>) {
+        (self.kind, self.title.clone(), self.year)
+    }
+}
+
+/// Parse the year box: empty is fine; otherwise exactly four digits from
+/// [`MIN_SEARCH_YEAR`] through [`max_search_year`].
+pub fn parse_manual_year(s: &str) -> Result<Option<u16>, String> {
+    let t = s.trim();
+    if t.is_empty() {
+        return Ok(None);
+    }
+    let max = max_search_year();
+    if t.len() == 4
+        && t.chars().all(|c| c.is_ascii_digit())
+        && let Ok(y) = t.parse::<u16>()
+        && (MIN_SEARCH_YEAR..=max).contains(&y)
+    {
+        return Ok(Some(y));
+    }
+    Err(format!("Year must be empty or a 4-digit year from {MIN_SEARCH_YEAR} to {max}."))
+}
+
+/// Validate the prompt fields. The title must not be empty after trimming.
+pub fn manual_query(title: &str, year: &str, kind: crate::tmdb::SearchKind) -> Result<ManualQuery, String> {
+    let title = title.trim().to_string();
+    if title.is_empty() {
+        return Err("Type the movie or TV show name.".into());
+    }
+    Ok(ManualQuery { title, year: parse_manual_year(year)?, kind })
+}
+
+/// Session key for a typed override: the folder that holds the group's
+/// title-bearing files. A later Look up of the same folder reuses the name.
+pub fn override_key(rows: &[Row], group: &Group) -> String {
+    let i = group.main.first().or(group.episodes.first()).or(group.extras.first()).copied();
+    i.and_then(|i| rows.get(i))
+        .and_then(|r| r.source.parent())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Folder -> last typed query, for this session only.
+#[derive(Debug, Default, Clone)]
+pub struct SessionOverrides {
+    map: std::collections::HashMap<String, ManualQuery>,
+}
+
+impl SessionOverrides {
+    pub fn get(&self, key: &str) -> Option<&ManualQuery> {
+        if key.is_empty() { None } else { self.map.get(key) }
+    }
+
+    /// Remember a successful typed search. Cancel does not call this, so
+    /// the preview and the stored overrides stay as they were.
+    pub fn remember(&mut self, key: String, query: ManualQuery) {
+        if !key.is_empty() {
+            self.map.insert(key, query);
+        }
+    }
+}
+
 /// A TMDB entry on the right side of the match window.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
@@ -622,5 +740,85 @@ mod tests {
         assert_eq!(video_kind("Behind the Scenes"), Some(ExtraKind::BehindTheScenes));
         assert_eq!(video_kind("Teaser"), Some(ExtraKind::Trailers));
         assert_eq!(video_kind("Recap"), None);
+    }
+
+    #[test]
+    fn low_confidence_triggers_the_name_prompt() {
+        // "not high" means anything below High (Medium or Low).
+        assert!(needs_name_prompt(Confidence::Low));
+        assert!(needs_name_prompt(Confidence::Medium));
+        assert!(!needs_name_prompt(Confidence::High));
+        // well-named Alien files are High: no prompt
+        let alien = groups(&alien_rows());
+        assert_eq!(group_confidence(&alien_rows(), &alien[0]), Confidence::High);
+        assert!(!needs_name_prompt(group_confidence(&alien_rows(), &alien[0])));
+        // a messy movie name is not High
+        let messy = scan(&["some random film.mkv"]);
+        let g = groups(&messy);
+        assert_eq!(g.len(), 1);
+        assert_eq!(group_confidence(&messy, &g[0]), Confidence::Low);
+        assert!(needs_name_prompt(group_confidence(&messy, &g[0])));
+        // Arrival (2016)/movie.mkv is Medium (year/title from the folder only)
+        let mid = scan(&["Movies/Arrival (2016)/movie.mkv"]);
+        let g = groups(&mid);
+        assert_eq!(group_confidence(&mid, &g[0]), Confidence::Medium);
+        assert!(needs_name_prompt(group_confidence(&mid, &g[0])));
+    }
+
+    #[test]
+    fn zero_results_trigger_the_name_prompt() {
+        let empty: Result<Vec<crate::tmdb::Match>, String> = Ok(vec![]);
+        assert!(results_need_name_prompt(&empty));
+        let some = tmdb::parse_search(&fixture("search_movie_alien.json"), 8).map_err(|e| e.to_string());
+        assert!(!results_need_name_prompt(&some));
+        let err: Result<Vec<crate::tmdb::Match>, String> = Err("network".into());
+        assert!(!results_need_name_prompt(&err));
+    }
+
+    #[test]
+    fn override_query_is_sent_with_the_year_and_type() {
+        let q = manual_query("The Expanse", "2015", SearchKind::Tv).unwrap();
+        assert_eq!(q.search_parts(), (SearchKind::Tv, "The Expanse".into(), Some(2015)));
+        let auth = tmdb::Auth::from_key(&"0123456789abcdef".repeat(2)).unwrap();
+        let url = tmdb::search_url(q.kind, &q.title, q.year, "en-US", &auth);
+        assert!(url.contains("/search/tv?"), "{url}");
+        assert!(url.contains("query=The+Expanse") || url.contains("query=The%20Expanse"), "{url}");
+        assert!(url.contains("first_air_date_year=2015"), "{url}");
+        let movie = manual_query("  Alien  ", "1979", SearchKind::Movie).unwrap();
+        let url = tmdb::search_url(movie.kind, &movie.title, movie.year, "en-US", &auth);
+        assert!(url.contains("/search/movie?"), "{url}");
+        assert!(url.contains("year=1979"), "{url}");
+        assert!(!url.contains("first_air_date_year"), "{url}");
+    }
+
+    #[test]
+    fn invalid_year_is_rejected() {
+        let max = max_search_year();
+        assert_eq!(parse_manual_year(""), Ok(None));
+        assert_eq!(parse_manual_year("  "), Ok(None));
+        assert_eq!(parse_manual_year("1979"), Ok(Some(1979)));
+        assert_eq!(parse_manual_year(&MIN_SEARCH_YEAR.to_string()), Ok(Some(MIN_SEARCH_YEAR)));
+        assert_eq!(parse_manual_year(&max.to_string()), Ok(Some(max)));
+        for bad in ["79", "197", "01979", "abcd", "1869", &(max + 1).to_string(), "1979a"] {
+            assert!(parse_manual_year(bad).is_err(), "accepted {bad}");
+        }
+        assert!(manual_query("", "1979", SearchKind::Movie).unwrap_err().contains("Type the movie"));
+        assert!(manual_query("Alien", "99", SearchKind::Movie).is_err());
+        // a cancelled prompt never writes an override and never changes rows
+        let rows = alien_rows();
+        let g = groups(&rows);
+        let key = override_key(&rows, &g[0]);
+        assert!(key.ends_with("/lib") || key == "/lib", "{key}");
+        let before: Vec<_> = rows.iter().map(|r| (r.source.clone(), r.analysis.title.clone(), r.analysis.from_tmdb, r.analysis.confidence)).collect();
+        let mut saved = SessionOverrides::default();
+        assert!(saved.get(&key).is_none());
+        // cancel: do not call remember, and do not call apply, so names stay put
+        assert!(saved.get(&key).is_none());
+        let after: Vec<_> = rows.iter().map(|r| (r.source.clone(), r.analysis.title.clone(), r.analysis.from_tmdb, r.analysis.confidence)).collect();
+        assert_eq!(before, after, "cancel must leave the preview unchanged");
+        saved.remember(key.clone(), manual_query("Alien", "1979", SearchKind::Movie).unwrap());
+        assert_eq!(saved.get(&key).unwrap().title, "Alien");
+        // a later look-up of the same folder reuses it
+        assert_eq!(saved.get(&override_key(&rows, &g[0])).unwrap().year, Some(1979));
     }
 }

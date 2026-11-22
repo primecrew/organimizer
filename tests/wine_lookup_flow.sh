@@ -10,6 +10,8 @@
 # prefix set to: mode = plex, width = 1500, height = 940, x = y = 10, the
 # Plex source = a folder with the demo files below, tmdb_enabled = true,
 # tmdb_key = 0123456789abcdef0123456789abcdef.
+# Plex destination should be inplace (a missing movies_root warning
+# shifts the What you have / Look up buttons).
 #   Alien.1979.1080p.BluRay.x264/{Alien.1979.1080p.BluRay.x264.mkv, alien making of.mkv,
 #     Alien.1979.Trailer.mkv, Alien (1979) Featurette - The Beast Within.mkv, *.en.srt}
 #   The Expanse/Season2/{Expanse - 2x01 - Safe.mkv, The Expanse S2 E2.mkv,
@@ -47,12 +49,18 @@ click 911 126; settle                    # Scan
 click 50 223; sleep 6; shot results      # Look up: Alien (1979)
 expect "GET /3/search/movie 200"
 expect "GET /t/p/w92/alien-poster.jpg 200"
-click 655 258; sleep 6; settle           # This one: Alien
+# "Search for something else..." sits above Cancel on the results picker.
+# Coordinates are 1024x640 preview units (see click()); override with
+# MANUAL_X / MANUAL_Y if the layout shifts.
+click ${MANUAL_X:-353} ${MANUAL_Y:-444}; sleep 5; shot manual-search
+xdotool windowactivate --sync "$(win)" 2>/dev/null || true
+xdotool key Escape; sleep 3
+click 659 246; sleep 6; settle           # This one: Alien
 expect "GET /3/movie/348 200"
 click 290 409; settle                    # OK - use these names
 click 50 245; sleep 6; settle            # Look up: The Expanse - Season 2
 expect "GET /3/search/tv 200"
-click 660 323; sleep 6; shot match       # This one: The Expanse
+click 659 310; sleep 6; shot match       # This one: The Expanse
 expect "GET /3/tv/63639 200"
 expect "GET /3/tv/63639/season/2 200"
 click 290 409; shot preview              # OK
