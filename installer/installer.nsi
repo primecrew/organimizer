@@ -11,7 +11,7 @@
 ;   setup asks you to close it first.
 ; - 3.0 rename: an installed PhotoSorter (2.x, <LEGACY_ID> uninstall entry) counts as an
 ;   upgrade. The banner reads "Updating existing installation: PhotoSorter v2.0.5 →
-;   Organimizer v3.0.4"; Organimizer goes next to it (...\PhotoSorter →
+;   Organimizer v3.0.5"; Organimizer goes next to it (...\PhotoSorter →
 ;   ...\Organimizer, same mode). After the new files are in place setup removes only
 ;   PhotoSorter's own program files, its Start Menu / desktop shortcuts and its Add/Remove
 ;   entry. PhotoSorter.ini, presets, undo logs and photos are never deleted; the app imports
@@ -497,7 +497,7 @@ Function ReadyPage
     Abort
   ${EndIf}
   ${If} $Legacy == 1
-    ; "PhotoSorter v2.0.5 → Organimizer v3.0.4" / previous-name banners: two lines
+    ; "PhotoSorter v2.0.5 → Organimizer v3.0.5" / previous-name banners: two lines
     CreateFont $BannerFont "$(^Font)" 9 700
     ${NSD_CreateLabel} 0 0 100% 26u "$Banner"
     Pop $1

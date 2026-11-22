@@ -1837,6 +1837,14 @@ impl App {
                         ui.close();
                         self.open_help();
                     }
+                    if ui
+                        .button("Plex naming conventions…")
+                        .on_hover_text("Opens HELP.md at the Plex tab chapter (naming movies, TV, extras)")
+                        .clicked()
+                    {
+                        ui.close();
+                        self.open_help();
+                    }
                     if ui.button("About Organimizer…").on_hover_text("Version, publisher and build notes").clicked() {
                         ui.close();
                         self.dialog = Some(Dialog::About);
@@ -1877,7 +1885,13 @@ impl App {
         };
         match desktop::find_help(&dir) {
             Ok(p) => match desktop::open_text_file(&p) {
-                Ok(()) => self.status = format!("Opened {}", p.display()),
+                Ok(()) => {
+                    self.status = if self.mode == Mode::Plex {
+                        format!("Opened {} - see the Plex tab chapter in Contents", p.display())
+                    } else {
+                        format!("Opened {}", p.display())
+                    };
+                }
                 Err(e) => {
                     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     self.dialog = Some(Dialog::Message {

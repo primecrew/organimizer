@@ -3,8 +3,9 @@
 //!
 //! * Movies:   `Title (Year)/Title (Year) {edition-X}.ext`
 //! * Episodes: `Show (Year)/Season 01/Show (Year) - s01e02[-e03][ - Title].ext`
-//!   (date-based shows: `Show/Season 2024/Show - 2024-03-15.ext`; specials
-//!   go to `Season 00`)
+//!   (date-based shows: `Show/Season 08/Show - 2011-11-15.ext` when the
+//!   season is known, otherwise `Show/Season 2024/Show - 2024-03-15.ext`;
+//!   specials go to `Season 00`; stacked parts keep `-pt1` / `-cd2` etc.)
 //! * Extras:   `Title (Year)/Featurettes/Name.ext` (and the other Plex
 //!   extras folders), next to the movie or show they belong to.
 //! * Subtitles follow their video and keep language / forced / SDH tags
@@ -130,6 +131,9 @@ pub struct Analysis {
     pub episode_end: Option<u32>,
     /// Date-based shows (`Show - 2024-03-15`).
     pub air_date: Option<(i32, u32, u32)>,
+    /// Stacked / split part, if the name ended in a Plex split token
+    /// (`pt1`, `cd2`, `disc1`, `disk1`, `dvd1`, `part2`; only 1-8).
+    pub stack: Option<String>,
     pub episode_title: Option<String>,
     pub extra: Option<ExtraKind>,
     /// Extras: the name the file gets inside the extras folder.
@@ -158,6 +162,7 @@ impl Analysis {
             episode: None,
             episode_end: None,
             air_date: None,
+            stack: None,
             episode_title: None,
             extra: None,
             extra_name: None,
@@ -212,7 +217,9 @@ re!(EP_ONLY, r"(?i)(?:^|[^a-z0-9])(?:episode|ep|e)[ ._-]?(\d{1,4})(?:$|[^a-z0-9]
 re!(BARE_NUM, r"(?:^|[ ._-])(\d{1,3})(?:$|[ ._-])");
 re!(SEASON_DIR, r"(?i)^(?:season|series|staffel|saison|temporada|seizoen)[ ._-]*(\d{1,4})(?:\b.*)?$|^s(\d{1,2})$");
 re!(SEASON_IN_NAME, r"(?i)(?:^|[ ._-])(?:s(\d{1,2})|season[ ._-]?(\d{1,2}))(?:$|[ ._-])");
-re!(INLINE_EXTRA, r"(?i)-(behindthescenes|deleted|featurette|interview|scene|short|trailer|other)$");
+re!(INLINE_EXTRA, r"(?i)-(behindthescenes|deleted|featurette|interview|scene|short|trailer|other)(\d*)$");
+// Plex stacked/split files: cdX, discX, diskX, dvdX, partX, ptX (X = 1-8).
+re!(STACK, r"(?i)(?:^|[ ._\-])((?:cd|disc|disk|dvd|part|pt)[ ._-]?([1-8]))$");
 re!(SAMPLE, r"(?i)(?:^|[ ._\-\[\(])sample(?:$|[ ._\-\]\)])");
 re!(SPACES, r"\s+");
 re!(
@@ -535,7 +542,7 @@ fn find_tv(s: &str) -> Option<TvHit> {
     if let Some(c) = DATE.captures(s) {
         let (y, mo, d): (i32, u32, u32) = (c[1].parse().ok()?, c[2].parse().ok()?, c[3].parse().ok()?);
         if chrono::NaiveDate::from_ymd_opt(y, mo, d).is_some() {
-            let mut h = hit(c.get(1).unwrap().start(), c.get(3).unwrap().end(), Some(y as u32), None, None, true);
+            let mut h = hit(c.get(1).unwrap().start(), c.get(3).unwrap().end(), None, None, None, true);
             h.date = Some((y, mo, d));
             return Some(h);
         }
@@ -645,10 +652,51 @@ fn extra_display_name(name_part: &str, kind: ExtraKind, movie_title: &str) -> St
 }
 
 /// Analyze one video file. `folders` are the names of the folders that
+/// Pull a Plex stacked-part suffix off the file stem (` - pt1`, `_cd2`).
+/// Official tokens: cd, disc, disk, dvd, part, pt, with a number 1-8.
+fn take_stack(stem: &str) -> (String, Option<String>) {
+    let Some(c) = STACK.captures(stem) else {
+        return (stem.to_string(), None);
+    };
+    let raw = c.get(1).unwrap().as_str();
+    let n = c.get(2).unwrap().as_str();
+    let kind = {
+        let l = raw.to_ascii_lowercase();
+        if l.starts_with("part") {
+            "part"
+        } else if l.starts_with("disc") {
+            "disc"
+        } else if l.starts_with("disk") {
+            "disk"
+        } else if l.starts_with("dvd") {
+            "dvd"
+        } else if l.starts_with("cd") {
+            "cd"
+        } else {
+            "pt"
+        }
+    };
+    let tag = format!("{kind}{n}");
+    let left = stem[..c.get(0).unwrap().start()].trim_end_matches([' ', '.', '_', '-']);
+    (left.to_string(), Some(tag))
+}
+
+fn stamp_stack(mut a: Analysis, stack: Option<String>) -> Analysis {
+    if let Some(s) = stack
+        && matches!(a.kind, Kind::Movie | Kind::Episode)
+    {
+        a.stack = Some(s.clone());
+        a.because(format!("split part \"{s}\" (Plex stacked file)"));
+    }
+    a
+}
+
 /// contain it, outermost first (normally starting with the scanned folder's
 /// own name); `file_name` includes the extension.
 pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
-    let (stem, _ext) = split_name(file_name);
+    let (raw_stem, _ext) = split_name(file_name);
+    let (stem_owned, stack) = take_stack(raw_stem);
+    let stem = stem_owned.as_str();
     let parent = folders.last().map(String::as_str).unwrap_or("");
 
     if SAMPLE.is_match(stem) || parent.eq_ignore_ascii_case("sample") || parent.eq_ignore_ascii_case("samples") {
@@ -709,7 +757,7 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         _ => (stem, None),
     };
 
-    // inline Plex suffix: "Name-trailer"
+    // inline Plex suffix: "Name-trailer" or "Name-deleted1" (a number index is allowed)
     if let Some(c) = INLINE_EXTRA.captures(stem) {
         let kind = match &c[1].to_lowercase()[..] {
             "behindthescenes" => ExtraKind::BehindTheScenes,
@@ -723,7 +771,12 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         };
         let name_part = &stem[..c.get(0).unwrap().start()];
         let why = format!("name ends in \"{}\" (Plex extras suffix) -> {}", c.get(0).unwrap().as_str(), kind.folder());
-        return extra_analysis(kind, name_part, &folder_title, folder_year, Confidence::High, why);
+        let mut a = extra_analysis(kind, name_part, &folder_title, folder_year, Confidence::High, why);
+        if let Some(n) = c.get(2).map(|m| m.as_str()).filter(|n| !n.is_empty()) {
+            let base = a.extra_name.clone().unwrap_or_default();
+            a.extra_name = Some(if base.is_empty() { n.to_string() } else { format!("{base} {n}") });
+        }
+        return a;
     }
     if let Some(dir_kind) = extra_from_dir {
         // a generic "Extras" folder: the name can still say which kind
@@ -799,7 +852,7 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
             a.because(format!("episode title \"{t}\" after the episode number"));
         }
         a.confidence = conf;
-        return a;
+        return stamp_stack(a, stack);
     }
 
     // keyword extras ("Heat Teaser.mkv"); a dated title such as
@@ -870,7 +923,7 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         a.notes.push("Name mentions an extra (trailer, interview...): check the type".into());
         a.confidence = a.confidence.min(Confidence::Medium);
     }
-    a
+    stamp_stack(a, stack)
 }
 
 /// Make one path component safe for Windows: `:` becomes ` -`, other
@@ -945,12 +998,23 @@ pub fn relative_path(a: &Analysis, ext: &str) -> Option<PathBuf> {
             {
                 name.push_str(&format!(" {{edition-{e}}}"));
             }
+            if let Some(st) = a.stack.as_deref() {
+                name.push_str(&format!(" - {st}"));
+            }
             p.push(format!("{name}{ext}"));
         }
         Kind::Episode => {
             let mut name;
             if let Some((y, m, d)) = a.air_date {
-                p.push(format!("Season {y}"));
+                // Plex's official layout still uses the show's Season NN
+                // folder for date-based episodes. Use that season when we
+                // know it; only if we cannot tell the season do we use the
+                // year (Season 2024) as a last-resort folder name.
+                if let Some(sn) = a.season {
+                    p.push(format!("Season {sn:02}"));
+                } else {
+                    p.push(format!("Season {y}"));
+                }
                 name = format!("{top} - {y:04}-{m:02}-{d:02}");
             } else {
                 let s = a.season.unwrap_or(1);
@@ -963,6 +1027,9 @@ pub fn relative_path(a: &Analysis, ext: &str) -> Option<PathBuf> {
             }
             if let Some(t) = a.episode_title.as_deref().map(safe_component).filter(|t| !t.is_empty()) {
                 name.push_str(&format!(" - {t}"));
+            }
+            if let Some(st) = a.stack.as_deref() {
+                name.push_str(&format!(" - {st}"));
             }
             p.push(format!("{name}{ext}"));
         }
@@ -1636,6 +1703,15 @@ mod tests {
     fn movies() {
         let cases = [
             ("Downloads/The.Matrix.1999.1080p.BluRay.x264-GROUP.mkv", "The Matrix (1999)/The Matrix (1999).mkv"),
+            (
+                "Movies/The Dark Knight (2008)/The Dark Knight (2008) - pt1.mp4",
+                "The Dark Knight (2008)/The Dark Knight (2008) - pt1.mp4",
+            ),
+            (
+                "Movies/The Dark Knight (2008)/The Dark Knight (2008) - pt2.mp4",
+                "The Dark Knight (2008)/The Dark Knight (2008) - pt2.mp4",
+            ),
+            ("Movies/The Dark Knight (2008)/The Dark Knight (2008) - cd1.mkv", "The Dark Knight (2008)/The Dark Knight (2008) - cd1.mkv"),
             ("Downloads/Inception (2010) [1080p] [YTS.MX].mp4", "Inception (2010)/Inception (2010).mp4"),
             (
                 "Downloads/blade_runner_2049_2017_2160p_uhd_bluray_hevc.mkv",
@@ -1714,6 +1790,18 @@ mod tests {
             (
                 "TV/The Daily Show 2024.03.15 Guest Name 720p.mp4",
                 "The Daily Show/Season 2024/The Daily Show - 2024-03-15 - Guest Name.mp4",
+            ),
+            (
+                "TV/The Daily Show/Season 08/The Daily Show - 2011-11-15 - Elijah Wood.avi",
+                "The Daily Show/Season 08/The Daily Show - 2011-11-15 - Elijah Wood.avi",
+            ),
+            (
+                "TV/Grey's Anatomy/Season 01/Grey's Anatomy - s01e01 - pt1.avi",
+                "Grey's Anatomy/Season 01/Grey's Anatomy - s01e01 - pt1.avi",
+            ),
+            (
+                "TV/Grey's Anatomy/Season 01/Grey's Anatomy - s01e01 - pt2.avi",
+                "Grey's Anatomy/Season 01/Grey's Anatomy - s01e01 - pt2.avi",
             ),
             (
                 "TV/Severance (2022)/Season 1/Severance (2022) - s01e03 - In Perpetuity.mkv",
@@ -2085,5 +2173,27 @@ mod recognition_tests {
         assert!(why.contains("episode title \"Home\""), "{why}");
         let w = analyze(&["Shows".into(), "Lost".into(), "Season 1".into()], "Episode 4.mkv").why_text();
         assert!(w.contains("inside a Season folder") && w.contains("show name from the folder"), "{w}");
+    }
+
+    #[test]
+    fn official_plex_split_parts_and_numbered_extras() {
+        assert_eq!(take_stack("The Dark Knight (2008) - pt1"), ("The Dark Knight (2008)".into(), Some("pt1".into())));
+        assert_eq!(take_stack("The Dark Knight (2008) - part2"), ("The Dark Knight (2008)".into(), Some("part2".into())));
+        assert_eq!(take_stack("Apartment (1960)"), ("Apartment (1960)".into(), None));
+        assert_eq!(take_stack("The Party (1968)"), ("The Party (1968)".into(), None));
+        let a = analyze(&["Movies".into(), "The Dark Knight (2008)".into()], "The Dark Knight (2008) - disc1.mkv");
+        assert_eq!(a.stack.as_deref(), Some("disc1"));
+        assert!(a.why_text().contains("split part \"disc1\""), "{}", a.why_text());
+        // Plex allows a number index on an inline extras suffix.
+        let rel = |path: &str| {
+            let parts: Vec<String> = path.split('/').map(String::from).collect();
+            let (file, folders) = parts.split_last().unwrap();
+            let an = analyze(folders, file);
+            let ext = format!(".{}", path.rsplit('.').next().unwrap());
+            relative_path(&an, &ext).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap()
+        };
+        assert_eq!(rel("Movies/Avatar (2009)/Bar Fight-deleted1.mp4"), "Avatar (2009)/Deleted Scenes/Bar Fight 1.mp4");
+        assert_eq!(rel("Movies/Avatar (2009)/Bar Fight-deleted2.mp4"), "Avatar (2009)/Deleted Scenes/Bar Fight 2.mp4");
+        assert_eq!(rel("Movies/Avatar (2009)/Teaser Trailer-trailer.mp4"), "Avatar (2009)/Trailers/Teaser Trailer.mp4");
     }
 }

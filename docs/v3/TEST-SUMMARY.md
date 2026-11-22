@@ -1,4 +1,4 @@
-# Organimizer 3.0.4 - test summary
+# Organimizer 3.0.5 - test summary
 
 Branch `v3-organimizer`, not released. All tests below ran on Linux with
 **Wine** (no real Windows machine was available), so please test on Windows
@@ -89,3 +89,15 @@ before merging, tagging or releasing.
   start. Check the SHA-256 against `Organimizer-v3.0.4-SHA256SUMS.txt` (earlier sums remain in the 3.0.0, 3.0.1, 3.0.2 and 3.0.3 SHA256SUMS files).
 
 Screenshots: `docs/v3/screenshots/`.
+
+## 3.0.5 Wine smoke (own Xvfb display and Wine prefix)
+
+Own Xvfb `:96` and prefix `wpfx-305-help`. Shared displays `:1`, `:5`, `:77` and shared prefixes were not touched.
+
+| Check | Result |
+|---|---|
+| Portable `Organimizer.exe` launch; header shows v3.0.5; Plex Media tab empty state has a **Plex naming conventions (Help)** button | OK |
+| F1 (from the Plex tab) opens `HELP.md` in Notepad; status line is `Opened ...HELP.md - see the Plex tab chapter in Contents` | OK |
+| HELP.md is ASCII, starts at Organimizer 3.0.5, and contains the Plex tab chapter (movies, eight extras folders and suffixes, TV naming, common mistakes, cheat sheet, official support URLs) | OK (screenshot `help-plex.png`) |
+| Help > Plex naming conventions... is in the Help menu | OK (present in the menu; F1 used for the screenshot) |
+

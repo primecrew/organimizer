@@ -4,6 +4,23 @@ All versions are Windows 10/11 builds (portable exe; from 2.0.5 also an
 installer). None of them is code-signed, and so far they have been tested on
 Linux and under Wine only, not on a real Windows PC.
 
+## 3.0.5 – Plex naming Help, official extras and stacked files (branch `v3-organimizer`, not released yet)
+- Help (F1) now has a **Plex tab** chapter that explains official Plex Media
+  Server naming for movies, the eight extras folders and inline suffixes,
+  TV shows (specials, multi-episode, date-based), common mistakes taken
+  from Organimizer's own tests, and a cheat sheet. Rules are taken from
+  Plex's support articles, not invented. **Help > Plex naming conventions...**
+  and a **Plex naming conventions (Help)** button on an empty Plex tab
+  open the same file; F1 from the Plex tab points at that chapter in
+  Contents (Windows cannot jump to a Markdown heading in Notepad).
+- Plex naming now keeps official stacked / split suffixes (`- pt1`,
+  `- cd1`, `- disc1`, `- disk1`, `- dvd1`, `- part1`, parts 1-8) on
+  movies and episodes, recognizes numbered extras suffixes such as
+  `-deleted1`, and keeps a date-based episode in its existing `Season NN`
+  folder instead of using the air-date year as the season.
+- Installer `Organimizer-v3.0.5-setup.exe` and portable zip
+  `Organimizer-v3.0.5-win64.zip`.
+
 ## 3.0.4 – type the name when TMDB lookup is unsure (branch `v3-organimizer`, not released yet)
 - On the Plex tab, Look up asks you to type the movie or TV show name (and
   an optional 4-digit year) when the filename confidence is not High

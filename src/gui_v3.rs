@@ -1218,6 +1218,14 @@ impl App {
                         .to_string()
                 };
                 ui.label(RichText::new(text).weak());
+                ui.add_space(10.0);
+                if ui
+                    .button("Plex naming conventions (Help)")
+                    .on_hover_text("Opens HELP.md: official Plex folder and file names for movies, TV and extras")
+                    .clicked()
+                {
+                    self.open_help();
+                }
                 if let Some(rep) = &self.plex.report {
                     for (p, e) in rep.errors.iter().take(20) {
                         ui.label(RichText::new(format!("{}: {e}", p.display())).color(red()).small());

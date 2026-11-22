@@ -1,6 +1,6 @@
 [package]
 name = "organimizer"
-version = "3.0.4"
+version = "3.0.5"
 edition = "2024"
 description = "Organimizer: rename and sort files into date folders, and organize movies and TV shows for Plex"
 license = "GPL-3.0-or-later"
