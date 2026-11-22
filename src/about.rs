@@ -27,7 +27,7 @@ pub const ABOUT_NOTE: &str = "The exe is not code-signed, so Windows SmartScreen
 /// License line (About); the full text ships as LICENSE beside the exe.
 pub const LICENSE_LINE: &str = "Licensed under GPL v3";
 
-/// "Organimizer 3.0.2".
+/// "Organimizer 3.0.3".
 pub fn title_with_version() -> String {
     format!("{PRODUCT} {VERSION}")
 }
@@ -48,8 +48,8 @@ mod tests {
         assert_eq!(SHORT_NAME, "Organimizer");
         assert_eq!(PREV_PRODUCT, "PrimeCrew Organimizer");
         assert_eq!(PUBLISHER, "PrimeCrew Software");
-        assert_eq!(VERSION, "3.0.2");
-        assert_eq!(title_with_version(), "Organimizer 3.0.2");
+        assert_eq!(VERSION, "3.0.3");
+        assert_eq!(title_with_version(), "Organimizer 3.0.3");
         assert!(copyright().contains("PrimeCrew Software"));
         // build.rs writes the version resource from literals; keep them in sync
         let build = include_str!("../build.rs");
@@ -60,13 +60,15 @@ mod tests {
         assert_eq!(LICENSE_LINE, "Licensed under GPL v3");
         assert!(ABOUT_NOTE.contains("not code-signed") && ABOUT_NOTE.contains("Licensed under GPL v3"));
         assert_eq!(env!("CARGO_PKG_LICENSE"), "GPL-3.0-or-later");
-        // the full, unmodified GPL text is in the repo (and in the zip)
+        // LICENSE is the unmodified official GPL v3 text (byte-identical to origin/master)
         let gpl = include_str!("../LICENSE");
-        // a one-line program copyright sits above the unmodified GPL v3 text
-        assert!(gpl.starts_with("Copyright (C) 2026 PrimeCrew Software\n\n"));
-        assert!(gpl.contains("                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007"));
-        assert!(gpl.contains("END OF TERMS AND CONDITIONS"));
-        assert_eq!(gpl.lines().count(), 676);
+        assert!(gpl.starts_with("                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007"));
+        assert!(gpl.contains("END OF TERMS AND CONDITIONS") && gpl.lines().count() == 674);
+        let copyright = include_str!("../COPYRIGHT");
+        assert!(copyright.contains("Organimizer"));
+        assert!(copyright.contains("Copyright (C) 2026 PrimeCrew Software"));
+        assert!(copyright.contains("GNU General Public License"));
+        assert!(copyright.contains("LICENSE"));
         assert_eq!(build.matches("CompanyName").count(), 1);
         assert!(DISTRIBUTION_NOTE.contains("not code-signed") && DISTRIBUTION_NOTE.contains("Portable"));
         assert!(DISTRIBUTION_NOTE.contains(r"%APPDATA%\PrimeCrew Software\Organimizer"));

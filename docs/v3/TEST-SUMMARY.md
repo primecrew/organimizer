@@ -1,4 +1,4 @@
-# Organimizer 3.0.2 - test summary
+# Organimizer 3.0.3 - test summary
 
 Branch `v3-organimizer`, not released. All tests below ran on Linux with
 **Wine** (no real Windows machine was available), so please test on Windows
@@ -55,7 +55,14 @@ before merging, tagging or releasing.
 | Portable launch; window title and header "Organimizer" v3.0.2; Help > About is a centred window with 72 px icon, "Organimizer", "Version 3.0.2", "by PrimeCrew Software", description, unsigned/GPL note, copyright, TMDB attribution and a Close button | OK (screenshot `about-3.0.2.png`) |
 | Installer upgrade over a silent 3.0.1 install (GUI, completed) | OK: first page and Ready banner "Updating existing installation: Organimizer v3.0.1 -> v3.0.2" (Wine draws "->" as a box); Installed in stays `%LOCALAPPDATA%\Programs\Organimizer`. After install, Start Menu has only `PrimeCrew Software\Organimizer.lnk` (leftover `PrimeCrew Organimizer.lnk` removed); one Add/Remove entry, DisplayName "Organimizer", DisplayVersion 3.0.2 (same `Uninstall\Organimizer` key). BrandingText footer "PrimeCrew Software". Screenshot `installer-upgrade-3.0.2.png` |
 
+## 3.0.3 Wine smoke (own Xvfb display and Wine prefix)
+
+| Test | Result |
+|---|---|
+| Silent install (`Organimizer-v3.0.3-setup.exe /S`) into a new prefix | OK: `LICENSE` and `COPYRIGHT` in `%LOCALAPPDATA%\Programs\Organimizer`; installed `LICENSE` is byte-identical to `origin/master:LICENSE`; `COPYRIGHT` matches the repo file |
+
 ## Known limitations of this test run
+
 
 
 
@@ -70,6 +77,6 @@ before merging, tagging or releasing.
   and the whole lookup flow ran against a local mock server serving
   hand-written fixtures in TMDB's format.
 - The exe and setup are unsigned: Windows SmartScreen will warn on first
-  start. Check the SHA-256 against `Organimizer-v3.0.2-SHA256SUMS.txt` (earlier sums remain in the 3.0.0 and 3.0.1 SHA256SUMS files).
+  start. Check the SHA-256 against `Organimizer-v3.0.3-SHA256SUMS.txt` (earlier sums remain in the 3.0.0, 3.0.1 and 3.0.2 SHA256SUMS files).
 
 Screenshots: `docs/v3/screenshots/`.

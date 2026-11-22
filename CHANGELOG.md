@@ -4,6 +4,16 @@ All versions are Windows 10/11 builds (portable exe; from 2.0.5 also an
 installer). None of them is code-signed, and so far they have been tested on
 Linux and under Wine only, not on a real Windows PC.
 
+## 3.0.3 – LICENSE is the official GPL v3 text; COPYRIGHT file (branch `v3-organimizer`, not released yet)
+- `LICENSE` is once again the unmodified official GNU GPL v3 text
+  (byte-identical to `origin/master` and gnu.org `gpl-3.0.txt`), so GitHub
+  can detect the license. The program copyright is in a new `COPYRIGHT`
+  file (Organimizer, Copyright (C) 2026 PrimeCrew Software, GPL-3.0-or-later,
+  pointing to LICENSE) and in the README. Both LICENSE and COPYRIGHT ship
+  in the portable zip and the installer (and are removed by uninstall).
+- Installer `Organimizer-v3.0.3-setup.exe` and portable zip
+  `Organimizer-v3.0.3-win64.zip`.
+
 ## 3.0.2 – visible name Organimizer, About aligned (branch `v3-organimizer`, not released yet)
 - The visible name is now **Organimizer** (capital O, same as the GitHub
   repo). Window title, header, Help > About, version-info ProductName /

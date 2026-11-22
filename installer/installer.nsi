@@ -11,7 +11,7 @@
 ;   setup asks you to close it first.
 ; - 3.0 rename: an installed PhotoSorter (2.x, <LEGACY_ID> uninstall entry) counts as an
 ;   upgrade. The banner reads "Updating existing installation: PhotoSorter v2.0.5 →
-;   Organimizer v3.0.2"; Organimizer goes next to it (...\PhotoSorter →
+;   Organimizer v3.0.3"; Organimizer goes next to it (...\PhotoSorter →
 ;   ...\Organimizer, same mode). After the new files are in place setup removes only
 ;   PhotoSorter's own program files, its Start Menu / desktop shortcuts and its Add/Remove
 ;   entry. PhotoSorter.ini, presets, undo logs and photos are never deleted; the app imports
@@ -397,6 +397,7 @@ Section "${APP_NAME} (required)" SecApp
   File "/oname=README.txt" "${DOC_DIR}\README.txt"
   File "/oname=HELP.md" "${DOC_DIR}\HELP.md"
   File "/oname=LICENSE" "${SRC_DIR}\LICENSE"
+  File "/oname=COPYRIGHT" "${SRC_DIR}\COPYRIGHT"
   File "/oname=THIRD-PARTY-NOTICES.txt" "${DOC_DIR}\THIRD-PARTY-NOTICES.txt"
   ; tells the app it is installed: settings go to %APPDATA%, not next to the exe
   FileOpen $0 "$INSTDIR\${MARKER}" w
@@ -449,6 +450,7 @@ Function RemoveLegacy
     Delete "$LegacyDir\README.txt"
     Delete "$LegacyDir\HELP.md"
     Delete "$LegacyDir\LICENSE"
+    Delete "$LegacyDir\COPYRIGHT"
     Delete "$LegacyDir\THIRD-PARTY-NOTICES.txt"
     Delete "$LegacyDir\uninstall.exe"
     RMDir "$LegacyDir" ; only if empty: anything else there stays
@@ -495,7 +497,7 @@ Function ReadyPage
     Abort
   ${EndIf}
   ${If} $Legacy == 1
-    ; "PhotoSorter v2.0.5 → Organimizer v3.0.2" / previous-name banners: two lines
+    ; "PhotoSorter v2.0.5 → Organimizer v3.0.3" / previous-name banners: two lines
     CreateFont $BannerFont "$(^Font)" 9 700
     ${NSD_CreateLabel} 0 0 100% 26u "$Banner"
     Pop $1
@@ -626,7 +628,7 @@ Function .onInit
 FunctionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "The program, README, HELP, LICENSE (GPL v3) and third-party notices."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecApp} "The program, README, HELP, LICENSE (GPL v3), COPYRIGHT and third-party notices."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStart} "A shortcut in the Start Menu, under ${PUBLISHER}."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} "A shortcut on the desktop."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
@@ -657,6 +659,7 @@ Section "un.${APP_NAME}" UnSecApp
   Delete "$INSTDIR\README.txt"
   Delete "$INSTDIR\HELP.md"
   Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\COPYRIGHT"
   Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
   Delete "$INSTDIR\${MARKER}"
   Delete "$INSTDIR\uninstall.exe"

@@ -58,7 +58,7 @@ fi
 EXE_SHA=$(sha256sum "$EXE" | cut -d' ' -f1)
 echo "== $APP_NAME $VERSION  exe sha256 $EXE_SHA"
 
-# ---- docs shipped with both: README (exe SHA filled in), HELP, LICENSE, notices
+# ---- docs shipped with both: README (exe SHA filled in), HELP, LICENSE, COPYRIGHT, notices
 python3 scripts/gen-third-party-notices.py "$DOC_DIR/THIRD-PARTY-NOTICES.txt"
 python3 - "$DOC_DIR/README.txt" "$EXE_SHA" <<'PY'
 import re, sys
@@ -81,6 +81,7 @@ with zipfile.ZipFile(z, "w", zipfile.ZIP_DEFLATED) as f:
     for name in ["README.txt", "HELP.md", "THIRD-PARTY-NOTICES.txt"]:
         f.write(f"{d}/{name}", name)
     f.write("LICENSE", "LICENSE")
+    f.write("COPYRIGHT", "COPYRIGHT")
 PY
 
 # ---- installer
