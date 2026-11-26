@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use crate::blacklist::Blacklist;
 use crate::date_source::{DateConfig, DateMode, Fallback, SourceKind};
 use crate::favorites::Favorites;
-use crate::filetypes::TypeGroup;
 use crate::filename_date::DateOrder;
+use crate::filetypes::TypeGroup;
 use crate::rename::RuleSpec;
 use crate::scan::DEFAULT_EXTENSIONS;
 use crate::template::DEFAULT_TEMPLATE;
@@ -59,6 +59,11 @@ pub struct PlexSettings {
     pub tmdb_language: String,
     /// Add "{tmdb-ID}" to the folder name of titles confirmed on TMDB.
     pub tmdb_id_tag: bool,
+    /// 3.0.6: true = "Rename only" (rename files where they are, nothing
+    /// moves); false = "Full sort" (build the Plex folders).
+    pub rename_only: bool,
+    /// 3.0.6: last folders used on the Plex tab, most recent first (max 4).
+    pub recent: Vec<String>,
 }
 
 impl Default for PlexSettings {
@@ -73,6 +78,8 @@ impl Default for PlexSettings {
             tmdb_key: String::new(),
             tmdb_language: DEFAULT_TMDB_LANGUAGE.into(),
             tmdb_id_tag: true,
+            rename_only: true,
+            recent: Vec::new(),
         }
     }
 }
@@ -146,6 +153,9 @@ pub struct Settings {
     pub plex: PlexSettings,
     /// Last top-level tab: "organize" or "plex".
     pub mode: String,
+    /// 3.0.6: last folders used on the Organize tab, most recent first
+    /// (max 4). The source box itself starts blank on every launch.
+    pub recent_folders: Vec<String>,
 }
 
 impl Default for Settings {
@@ -173,6 +183,7 @@ impl Default for Settings {
             favorites: Favorites::default(),
             plex: PlexSettings::default(),
             mode: "organize".into(),
+            recent_folders: Vec::new(),
         }
     }
 }
@@ -495,6 +506,11 @@ impl Settings {
         if let Some(v) = pget("tmdb_language").filter(|v| !v.trim().is_empty() && v.len() <= 10) {
             p.tmdb_language = v.trim().to_string();
         }
+        if let Some(v) = pget("mode") {
+            p.rename_only = matches!(v.trim().to_ascii_lowercase().as_str(), "rename_only" | "rename" | "renameonly");
+        }
+        p.recent = recent_from(d.get("plex"));
+        s.recent_folders = recent_from(d.get("general"));
         if let Some(v) = get("window", "mode").filter(|v| matches!(*v, "organize" | "plex")) {
             s.mode = v.to_string();
         }
@@ -672,9 +688,14 @@ impl Settings {
 ; ---------------------------------------------------------------------------
 [General]
 
-; Folder that was selected last time (restored on start-up).
+; Folder selected in the last session. Since 3.0.6 it is NOT restored on
+; start-up (the Source box starts blank); see recent1..recent4 below.
 ; Any absolute path, or empty for none. Default: empty
 last_folder = {last_folder}
+
+; Last folders used (Recent list next to the Source box), most recent
+; first, at most 4. Default: empty
+{recent_general}
 
 ; Also scan every subfolder of the chosen folder.
 ; Each folder that contains images gets its own "Month YYYY" subfolders.
@@ -896,6 +917,13 @@ tmdb_language = {tmdb_language}
 ; Add {{tmdb-ID}} to the folder of titles confirmed on TMDB (Plex then
 ; skips its own guess). Default: true
 tmdb_id_folder_tag = {tmdb_id_tag}
+; full_sort = build Show (Year)\Season NN and Movie (Year) folders;
+; rename_only = rename files where they are (nothing moves; folder name
+; fixes are offered unticked). Default: rename_only
+mode = {plex_mode}
+; Last folders used on the Plex tab (Recent list), most recent first,
+; at most 4. Default: empty
+{plex_recent}
 
 ; ---------------------------------------------------------------------------
 ; Presets: [Preset:Name] sections, saved from the app. Each holds a whole
@@ -958,8 +986,75 @@ tmdb_id_folder_tag = {tmdb_id_tag}
             tmdb_key = one(self.plex.tmdb_key.trim()),
             tmdb_language = one(&self.plex.tmdb_language),
             tmdb_id_tag = self.plex.tmdb_id_tag,
+            plex_mode = if self.plex.rename_only { "rename_only" } else { "full_sort" },
+            plex_recent = recent_ini(&self.plex.recent),
+            recent_general = recent_ini(&self.recent_folders),
         )
         .replace('\n', "\r\n") // Notepad-friendly line endings
+    }
+}
+
+/// Most-recently-used folders kept in the INI and shown in the Recent list.
+pub const RECENT_MAX: usize = 4;
+
+/// Put `path` at the front of `list`: trimmed, surrounding quotes and a
+/// trailing slash removed, duplicates dropped case-insensitively (Windows
+/// paths), at most [`RECENT_MAX`] entries. Empty paths are ignored.
+pub fn push_recent(list: &mut Vec<String>, path: &str) {
+    let p = clean_recent(path);
+    if p.is_empty() {
+        return;
+    }
+    let k = recent_key(&p);
+    list.retain(|x| recent_key(x) != k);
+    list.insert(0, p);
+    list.truncate(RECENT_MAX);
+}
+
+fn clean_recent(path: &str) -> String {
+    let p = path.replace(['\r', '\n'], " ");
+    let p = p.trim().trim_matches('"').trim();
+    // keep a drive root such as "D:\" or "/" intact
+    let trimmed = p.trim_end_matches(['\\', '/']);
+    if trimmed.is_empty() || trimmed.ends_with(':') { p.to_string() } else { trimmed.to_string() }
+}
+
+fn recent_key(p: &str) -> String {
+    clean_recent(p).replace('/', "\\").to_lowercase()
+}
+
+fn recent_from(map: Option<&BTreeMap<String, String>>) -> Vec<String> {
+    let mut v: Vec<(u32, String)> = map
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| k.strip_prefix("recent").and_then(|n| n.parse().ok()).map(|n| (n, v.clone())))
+        .collect();
+    v.sort_by_key(|(n, _)| *n);
+    let mut out = Vec::new();
+    for (_, p) in v.into_iter().rev() {
+        push_recent(&mut out, &p);
+    }
+    out
+}
+
+fn recent_ini(list: &[String]) -> String {
+    list.iter()
+        .take(RECENT_MAX)
+        .enumerate()
+        .map(|(i, p)| format!("recent{} = {}", i + 1, p.replace(['\r', '\n'], " ")))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+impl Settings {
+    /// 3.0.6: the Source boxes start blank on every launch. The folders of
+    /// the last session (from an older INI too) go into the Recent lists.
+    pub fn start_blank(&mut self) {
+        let (f, p) = (self.last_folder.clone(), self.plex.source.clone());
+        push_recent(&mut self.recent_folders, &f);
+        push_recent(&mut self.plex.recent, &p);
+        self.last_folder.clear();
+        self.plex.source.clear();
     }
 }
 
@@ -1766,6 +1861,8 @@ mod tests {
             tmdb_key: "0123456789abcdef0123456789abcdef".into(),
             tmdb_language: "de-DE".into(),
             tmdb_id_tag: false,
+            rename_only: true,
+            recent: vec!["D:\\Downloads".into(), "E:\\TV\\Lost".into()],
         };
         s.mode = "plex".into();
         let text = s.to_ini();
@@ -1865,5 +1962,45 @@ mod tests {
         assert!(l2.notice.is_none());
         assert_eq!(l2.settings.last_folder, "D:\\Movies");
         assert!(old_path.is_file());
+    }
+
+    #[test]
+    fn recent_folders_mru_dedup_and_round_trip() {
+        let mut v = vec![];
+        for p in ["D:\\A", "D:\\B", "d:\\a\\", "\"D:\\C\"", "", "D:\\D", "D:\\E"] {
+            push_recent(&mut v, p);
+        }
+        // most recent first, "d:\a\" deduped against "D:\A" (case-insensitive), max 4
+        assert_eq!(v, vec!["D:\\E", "D:\\D", "D:\\C", "d:\\a"]);
+        push_recent(&mut v, "D:\\");
+        assert_eq!(v[0], "D:\\"); // a drive root keeps its backslash
+        let mut s = Settings::default();
+        s.recent_folders = vec!["D:\\Photos".into(), "E:\\Camera".into()];
+        s.plex.recent = vec!["M:\\TV\\Lost".into()];
+        s.plex.rename_only = false;
+        let text = s.to_ini();
+        assert!(text.contains("recent1 = D:\\Photos") && text.contains("mode = full_sort"), "{text}");
+        assert_eq!(Settings::from_ini(&text), s);
+    }
+
+    #[test]
+    fn source_boxes_start_blank_and_last_folders_become_recent() {
+        let mut s = Settings::default();
+        s.last_folder = "D:\\Photos\\2024".into();
+        s.plex.source = "M:\\Downloads".into();
+        s.recent_folders = vec!["D:\\Old".into(), "d:\\photos\\2024".into()];
+        s.start_blank();
+        assert_eq!(s.last_folder, "");
+        assert_eq!(s.plex.source, "");
+        assert_eq!(s.recent_folders, vec!["D:\\Photos\\2024", "D:\\Old"]);
+        assert_eq!(s.plex.recent, vec!["M:\\Downloads"]);
+        // an older INI with only last_folder / [Plex] source
+        let mut old = Settings::from_ini("[General]\nlast_folder = C:\\Pics\n[Plex]\nsource = M:\\Rips\n");
+        old.start_blank();
+        assert_eq!(
+            (old.recent_folders.clone(), old.plex.recent.clone()),
+            (vec!["C:\\Pics".into()], vec!["M:\\Rips".into()])
+        );
+        assert!(old.plex.rename_only, "Rename only is the default mode");
     }
 }

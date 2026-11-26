@@ -1,4 +1,4 @@
-# Organimizer 3.0.5 - test summary
+# Organimizer 3.0.6 - test summary
 
 Branch `v3-organimizer`, not released. All tests below ran on Linux with
 **Wine** (no real Windows machine was available), so please test on Windows
@@ -6,8 +6,12 @@ before merging, tagging or releasing.
 
 ## Automated
 
-- `cargo test --no-default-features`: 160 tests pass:
-  - 153 unit tests (Plex name parser, per-file recognition and Why text,
+- `cargo test --no-default-features`: 170 tests pass:
+  - 163 unit tests (Plex Rename only: inside a Season folder, show folder,
+    library root, doubtful parents flagged, folder fixes unticked by
+    default, folder-fix collision never applied, apply + undo of folder
+    renames, unticked fixes leave files correct; Recent folders MRU and
+    blank start; Plex name parser, per-file recognition and Why text,
     disc rips and runtime rules, media duration from MP4/MKV/AVI headers,
     TMDB lookup grouping / query building / episode mapping / reassign /
     apply, the type-the-name prompt (low confidence and zero results,
@@ -101,3 +105,13 @@ Own Xvfb `:96` and prefix `wpfx-305-help`. Shared displays `:1`, `:5`, `:77` and
 | HELP.md is ASCII, starts at Organimizer 3.0.5, and contains the Plex tab chapter (movies, eight extras folders and suffixes, TV naming, common mistakes, cheat sheet, official support URLs) | OK (screenshot `help-plex.png`) |
 | Help > Plex naming conventions... is in the Help menu | OK (present in the menu; F1 used for the screenshot) |
 
+## 3.0.6 Wine smoke (own Xvfb display and Wine prefix)
+
+Own Xvfb `:96` and prefix `ps306-test/prefix`. Shared displays and prefixes were not touched.
+
+| Check | Result |
+|---|---|
+| Plex tab starts with an empty Source box; **Recent ⏷** lists the folder from the INI; picking it fills the box | OK |
+| Mode shows **Rename only** selected by default; Scan of `TV` (`Lost (2004)\Season 1`, `Specials`) proposes `Lost (2004) - s01e02.mkv` / `- s00e01.mkv` in their own folders; two folder fixes (`Season 01`, `Season 00`) shown unticked | OK (screenshot `plex-rename-only.png`) |
+| Ticking one fix changes Apply to "rename 2 files and 1 folders"; switching to Full sort shows Destination *Inside source folder* / *Library folders* and "Mode changed: click Rescan" (Apply disabled) | OK (screenshot `plex-full-sort-destination.png`) |
+| Apply / Undo with folder renames on disk | unit tests only (`apply_with_folder_fixes_then_undo_restores_everything`); not run in the GUI |

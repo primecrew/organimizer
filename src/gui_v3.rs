@@ -5,7 +5,8 @@
 use super::*;
 use organimizer::blacklist::{self, Blacklist};
 use organimizer::favorites::{self, Favorites};
-use organimizer::plex::{self, Confidence, ExtraKind, Kind};
+use organimizer::plex::{self, Confidence, ExtraKind, Kind, PlexMode};
+use organimizer::settings::push_recent;
 use organimizer::tmdb;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub(super) enum PlexMsg {
     },
     Scanned {
         root: PathBuf,
+        mode: PlexMode,
         rows: Vec<plex::Row>,
         skipped: Vec<PathBuf>,
         errors: Vec<(PathBuf, String)>,
@@ -99,6 +101,10 @@ pub(super) struct PlexState {
     pub pick: Option<TmdbPick>,
     pub confirm: Option<PlexConfirm>,
     pub undo_cache: (String, Option<PathBuf>),
+    /// 3.0.6: mode the rows were analyzed with (a mode change needs a rescan).
+    pub scanned_mode: PlexMode,
+    /// 3.0.6: Rename only folder-name fixes (separate rows, unticked).
+    pub fixes: Vec<plex::FolderFix>,
 }
 
 impl PlexState {
@@ -144,6 +150,30 @@ fn conf_color(c: Confidence) -> Color32 {
         Confidence::Medium => amber(),
         Confidence::Low => red(),
     }
+}
+
+/// "Recent ⏷" button next to a Source box: the last folders used (most
+/// recent first). Folders that no longer exist are shown greyed out and
+/// cannot be picked. Returns the folder the user picked.
+pub(super) fn recent_menu(ui: &mut egui::Ui, recent: &[String]) -> Option<String> {
+    let mut picked = None;
+    ui.add_enabled_ui(!recent.is_empty(), |ui| {
+        ui.menu_button("Recent ⏷", |ui| {
+            for p in recent {
+                let exists = Path::new(p).is_dir();
+                let r = ui.add_enabled(exists, egui::Button::new(p.as_str()));
+                let r = if exists { r } else { r.on_disabled_hover_text("This folder does not exist (any more)") };
+                if r.clicked() {
+                    picked = Some(p.clone());
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("The last folders you used")
+        .on_disabled_hover_text("No recent folders yet");
+    });
+    picked
 }
 
 /// "Movies\Heat (1995)\Heat (1995).mkv" style text for a plan item.
@@ -231,6 +261,7 @@ impl App {
             Mode::Organize => self.set_folder(&p),
             Mode::Plex => {
                 self.s.plex.source = p.to_string_lossy().into_owned();
+                push_recent(&mut self.s.plex.recent, &self.s.plex.source);
                 self.plex.status = format!("Selected {} - click Scan.", p.display());
             }
         }
@@ -625,8 +656,12 @@ impl App {
         PathBuf::from(self.s.plex.source.trim())
     }
 
+    pub(super) fn plex_mode(&self) -> PlexMode {
+        if self.s.plex.rename_only { PlexMode::RenameOnly } else { PlexMode::FullSort }
+    }
+
     fn plex_dest(&self) -> plex::Destination {
-        if self.s.plex.in_place {
+        if self.s.plex.in_place || self.s.plex.rename_only {
             return plex::Destination::default();
         }
         let p = |s: &str| {
@@ -638,7 +673,7 @@ impl App {
 
     /// Problems with the destination roots (None = OK).
     fn plex_dest_problem(&self) -> Option<String> {
-        if self.s.plex.in_place {
+        if self.s.plex.in_place || self.s.plex.rename_only {
             return None;
         }
         for (label, s) in [("Movies", &self.s.plex.movies_root), ("TV shows", &self.s.plex.tv_root)] {
@@ -684,6 +719,7 @@ impl App {
             return;
         }
         self.s.plex.source = p.to_string_lossy().into_owned();
+        push_recent(&mut self.s.plex.recent, &self.s.plex.source);
         self.plex.status = format!("Selected {} - click Scan to analyze it.", p.display());
         self.status = self.plex.status.clone();
         self.save_settings();
@@ -704,8 +740,11 @@ impl App {
         if let Some(w) = self.plex.worker.take() {
             w.cancel.store(true, Ordering::Relaxed);
         }
+        let src = self.s.plex.source.clone();
+        push_recent(&mut self.s.plex.recent, &src);
         self.save_settings();
         let recursive = self.s.plex.include_subfolders;
+        let mode = self.plex_mode();
         let bl = self.s.blacklist.clone();
         let mut exts: Vec<String> = organimizer::filetypes::VIDEO_EXTS.iter().map(|s| s.to_string()).collect();
         exts.extend(plex::SUBTITLE_EXTS.iter().map(|s| s.to_string()));
@@ -727,8 +766,15 @@ impl App {
             let cancelled = cancel.load(Ordering::Relaxed);
             let _ = tx.send(PlexMsg::Progress { text: format!("Analyzing {} files…", res.files.len()), frac: 0.5 });
             ctx.request_repaint();
-            let rows = plex::analyze_files(&root, &res.files);
-            let _ = tx.send(PlexMsg::Scanned { root, rows, skipped: res.skipped_dirs, errors: res.errors, cancelled });
+            let rows = plex::analyze_files_mode(&root, &res.files, mode);
+            let _ = tx.send(PlexMsg::Scanned {
+                root,
+                mode,
+                rows,
+                skipped: res.skipped_dirs,
+                errors: res.errors,
+                cancelled,
+            });
         }));
     }
 
@@ -738,7 +784,18 @@ impl App {
             self.plex.plan = None;
             return;
         };
-        self.plex.plan = Some(plex::build_plan(&root, &self.plex.rows, &self.plex_dest()));
+        let mode = self.plex.scanned_mode;
+        if mode == PlexMode::RenameOnly {
+            // recompute from the (possibly edited) rows; keep the user's ticks
+            let old = std::mem::take(&mut self.plex.fixes);
+            self.plex.fixes = plex::folder_fixes(&root, &self.plex.rows);
+            for f in self.plex.fixes.iter_mut() {
+                f.include = f.problem.is_none() && old.iter().any(|o| o.include && o.from == f.from && o.to == f.to);
+            }
+        } else {
+            self.plex.fixes.clear();
+        }
+        self.plex.plan = Some(plex::build_plan_mode(&root, &self.plex.rows, &self.plex_dest(), mode, &self.plex.fixes));
     }
 
     pub(super) fn plex_poll(&mut self) {
@@ -748,7 +805,7 @@ impl App {
         for m in msgs {
             match m {
                 PlexMsg::Progress { text, frac } => self.plex.progress = (text, frac),
-                PlexMsg::Scanned { root, rows, skipped, errors, cancelled } => {
+                PlexMsg::Scanned { root, mode, rows, skipped, errors, cancelled } => {
                     let subs = rows.iter().filter(|r| r.subtitle_of.is_some()).count();
                     let low = rows
                         .iter()
@@ -762,6 +819,8 @@ impl App {
                         if cancelled { " (scan canceled: partial)" } else { "" }
                     );
                     self.plex.root = Some(root);
+                    self.plex.scanned_mode = mode;
+                    self.plex.fixes.clear();
                     self.plex.rows = rows;
                     self.plex.skipped = skipped;
                     self.plex.errors = errors;
@@ -771,7 +830,7 @@ impl App {
                 }
                 PlexMsg::Applied(rep) => {
                     self.plex.status = format!(
-                        "Done: {} files moved into the Plex layout, {} errors{}. Undo is available.",
+                        "Done: {} files / folders renamed or moved, {} errors{}. Undo is available.",
                         rep.moved,
                         rep.errors.len(),
                         if rep.cancelled { " (canceled)" } else { "" }
@@ -833,6 +892,7 @@ impl App {
 
     fn plex_after_disk_change(&mut self) {
         self.plex.rows.clear();
+        self.plex.fixes.clear();
         self.plex.plan = None;
         self.plex.selected = None;
         self.plex.undo_cache.0 = "\0".into();
@@ -847,7 +907,11 @@ impl App {
         }
         let Some(plan) = self.plex.plan.clone() else { return };
         self.save_settings();
-        self.plex.status = "Moving files into the Plex layout…".into();
+        self.plex.status = if self.plex.scanned_mode == PlexMode::RenameOnly {
+            "Renaming files…".into()
+        } else {
+            "Moving files into the Plex layout…".into()
+        };
         self.plex.worker = Some(spawn_plex(ctx, PlexJob::Apply, move |tx, cancel, ctx| {
             let mut t = Ticker::new();
             let rep = ops::execute(&plan, &cancel, &mut |i, n, p| {
@@ -1020,12 +1084,15 @@ impl App {
                         self.plex_browse();
                     }
                     let src = self.s.plex.source.clone();
-                    let w = (ui.available_width() - fs * 20.0).max(fs * 10.0);
+                    let w = (ui.available_width() - fs * 25.0).max(fs * 10.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.s.plex.source)
                             .hint_text("…or drop a folder here")
                             .desired_width(w),
                     );
+                    if let Some(p) = recent_menu(ui, &self.s.plex.recent) {
+                        self.plex_set_source(Path::new(&p));
+                    }
                     self.star_button(ui, &src);
                     ui.checkbox(&mut self.s.plex.include_subfolders, "Include subfolders");
                     let scanning = matches!(self.plex.worker.as_ref().map(|w| w.kind), Some(PlexJob::Scan));
@@ -1057,39 +1124,74 @@ impl App {
                 }
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("2").strong().color(accent(ui)));
-                    ui.label(RichText::new("Destination").strong());
-                    let before = (self.s.plex.in_place, self.s.plex.movies_root.clone(), self.s.plex.tv_root.clone());
-                    ui.radio_value(&mut self.s.plex.in_place, true, "In place")
-                        .on_hover_text("Build the Plex folders inside the scanned folder");
-                    ui.radio_value(&mut self.s.plex.in_place, false, "Library folders")
-                        .on_hover_text("Move movies and TV shows into your Plex library folders");
-                    if !self.s.plex.in_place {
-                        for (label, which) in [("Movies:", 0), ("TV shows:", 1)] {
-                            ui.label(label);
-                            let field =
-                                if which == 0 { &mut self.s.plex.movies_root } else { &mut self.s.plex.tv_root };
-                            ui.add(
-                                egui::TextEdit::singleline(field)
-                                    .desired_width(fs * 13.0)
-                                    .hint_text("(scanned folder)"),
-                            );
-                            if ui.small_button("…").on_hover_text("Browse").clicked()
-                                && let Some(p) = rfd::FileDialog::new().set_title("Plex library folder").pick_folder()
-                            {
-                                if let Some(r) = self.blocked_reason(&p) {
-                                    self.dialog = Some(Dialog::Message { title: "Folder not allowed".into(), text: r });
-                                } else if which == 0 {
-                                    self.s.plex.movies_root = p.to_string_lossy().into_owned();
-                                } else {
-                                    self.s.plex.tv_root = p.to_string_lossy().into_owned();
+                    ui.label(RichText::new("Mode").strong());
+                    let before = self.s.plex.rename_only;
+                    ui.radio_value(&mut self.s.plex.rename_only, true, RichText::new("Rename only").strong())
+                        .on_hover_text(
+                            "Your folders are already right (Show (Year)\\Season 02, Movie (Year)): \
+                             rename each file where it is. Nothing moves and no folder is created. \
+                             Folder-name fixes are offered as separate rows, unticked.",
+                        );
+                    ui.radio_value(&mut self.s.plex.rename_only, false, RichText::new("Full sort").strong())
+                        .on_hover_text(
+                            "A mixed folder of downloads / rips: build Show (Year)\\Season NN and \
+                             Movie (Year) folders (with extras folders) and move the files into them.",
+                        );
+                    if before != self.s.plex.rename_only {
+                        self.save_settings();
+                    }
+                    let hint = if self.s.plex.rename_only {
+                        "files are renamed in their own folders"
+                    } else {
+                        "files are moved into new Plex folders"
+                    };
+                    ui.label(RichText::new(hint).weak());
+                    if self.plex.root.is_some() && self.plex.scanned_mode != self.plex_mode() {
+                        ui.label(RichText::new("Mode changed: click Rescan").color(amber()).strong());
+                    }
+                });
+                if !self.s.plex.rename_only {
+                    ui.horizontal(|ui| {
+                        ui.add_space(fs * 1.2);
+                        ui.label(RichText::new("Destination").strong());
+                        let before =
+                            (self.s.plex.in_place, self.s.plex.movies_root.clone(), self.s.plex.tv_root.clone());
+                        ui.radio_value(&mut self.s.plex.in_place, true, "Inside source folder")
+                            .on_hover_text("Build the Plex folders inside the scanned folder");
+                        ui.radio_value(&mut self.s.plex.in_place, false, "Library folders")
+                            .on_hover_text("Move movies and TV shows into your Plex library folders");
+                        if !self.s.plex.in_place {
+                            for (label, which) in [("Movies:", 0), ("TV shows:", 1)] {
+                                ui.label(label);
+                                let field =
+                                    if which == 0 { &mut self.s.plex.movies_root } else { &mut self.s.plex.tv_root };
+                                ui.add(
+                                    egui::TextEdit::singleline(field)
+                                        .desired_width(fs * 13.0)
+                                        .hint_text("(scanned folder)"),
+                                );
+                                if ui.small_button("…").on_hover_text("Browse").clicked()
+                                    && let Some(p) =
+                                        rfd::FileDialog::new().set_title("Plex library folder").pick_folder()
+                                {
+                                    if let Some(r) = self.blocked_reason(&p) {
+                                        self.dialog =
+                                            Some(Dialog::Message { title: "Folder not allowed".into(), text: r });
+                                    } else if which == 0 {
+                                        self.s.plex.movies_root = p.to_string_lossy().into_owned();
+                                    } else {
+                                        self.s.plex.tv_root = p.to_string_lossy().into_owned();
+                                    }
                                 }
                             }
                         }
-                    }
-                    if before != (self.s.plex.in_place, self.s.plex.movies_root.clone(), self.s.plex.tv_root.clone()) {
-                        self.plex.plan_dirty = true;
-                    }
-                });
+                        if before
+                            != (self.s.plex.in_place, self.s.plex.movies_root.clone(), self.s.plex.tv_root.clone())
+                        {
+                            self.plex.plan_dirty = true;
+                        }
+                    });
+                }
                 if let Some(p) = self.plex_dest_problem() {
                     ui.label(RichText::new(p).color(red()).small());
                 }
@@ -1148,13 +1250,22 @@ impl App {
                 }
                 let n = self.plex.plan.as_ref().map(|p| p.items.iter().filter(|i| i.status == Status::Move).count()).unwrap_or(0);
                 let stale = self.plex.root.is_some() && self.plex.root.as_deref() != Some(self.plex_root().as_path());
+                let mode_stale = self.plex.root.is_some() && self.plex.scanned_mode != self.plex_mode();
                 let problem = if stale {
                     Some("The source folder changed: click Scan / Rescan first".to_string())
+                } else if mode_stale {
+                    Some("The mode changed: click Rescan first".to_string())
                 } else {
                     self.plex_dest_problem()
                 };
                 let ok = n > 0 && problem.is_none() && !self.plex.busy() && !self.locked();
-                let text = if n > 0 { format!("✔ Apply - move {n} files into the Plex layout") } else { "✔ Apply".into() };
+                let dirs = self.plex.plan.as_ref().map(|p| p.items.iter().filter(|i| i.is_dir && i.status == Status::Move).count()).unwrap_or(0);
+                let text = match (n, self.plex.scanned_mode) {
+                    (0, _) => "✔ Apply".to_string(),
+                    (_, PlexMode::RenameOnly) if dirs > 0 => format!("✔ Apply - rename {} files and {dirs} folders", n - dirs),
+                    (_, PlexMode::RenameOnly) => format!("✔ Apply - rename {n} files"),
+                    _ => format!("✔ Apply - move {n} files into the Plex layout"),
+                };
                 let btn = if ok {
                     egui::Button::new(RichText::new(text).strong().color(Color32::WHITE)).fill(green().gamma_multiply(0.9))
                 } else {
@@ -1212,6 +1323,8 @@ impl App {
                     format!("Undo: {} files restored. Scan again to check the result.", rep.restored)
                 } else {
                     "Choose the folder with your movies or TV episodes and click Scan.\n\
+                     Rename only (default): your folders are already right, each file is renamed where it is.\n\
+                     Full sort: a mixed folder, Organimizer builds the Plex folders and moves the files.\n\
                      Organimizer proposes names like “Movies\\Heat (1995)\\Heat (1995).mkv” and \
                      “TV Shows\\Show (2008)\\Season 01\\Show (2008) - s01e02.mkv”, with subtitles and extras.\n\
                      You check and correct every proposal before anything is moved."
@@ -1234,6 +1347,7 @@ impl App {
             });
             return;
         }
+        self.plex_folder_fixes(ui);
         let rows = &self.plex.rows;
         let count = |k: Kind| rows.iter().filter(|r| r.subtitle_of.is_none() && r.analysis.kind == k).count();
         let subs = rows.iter().filter(|r| r.subtitle_of.is_some()).count();
@@ -1304,7 +1418,8 @@ impl App {
             .column(Column::initial(fs * 26.0).at_least(80.0).clip(true))
             .column(Column::remainder().at_least(60.0).clip(true))
             .header(row_h + 4.0, |mut h| {
-                for t in ["", "Match", "Type", "Current file", "New location (Plex)", "Why"] {
+                let new_col = if self.plex.scanned_mode == PlexMode::RenameOnly { "New name (Plex)" } else { "New location (Plex)" };
+                for t in ["", "Match", "Type", "Current file", new_col, "Why"] {
                     h.col(|ui| {
                         ui.label(RichText::new(t).strong());
                     });
@@ -1405,12 +1520,62 @@ impl App {
     }
 }
 
+impl App {
+    /// Rename only: folder-name fixes as their own rows, unticked by
+    /// default. Ticked ones are renamed after the files (deepest first).
+    fn plex_folder_fixes(&mut self, ui: &mut egui::Ui) {
+        if self.plex.scanned_mode != PlexMode::RenameOnly || self.plex.fixes.is_empty() {
+            return;
+        }
+        let root = self.plex.root.clone().unwrap_or_default();
+        let mut changed = false;
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!("Folder name fixes ({}) - optional, tick the ones you want", self.plex.fixes.len()))
+                .strong(),
+        );
+        egui::ScrollArea::vertical().id_salt("plex-fixes").max_height(self.s.font_size * 7.0).show(ui, |ui| {
+            for f in self.plex.fixes.iter_mut() {
+                ui.horizontal(|ui| {
+                    let from = f
+                        .from
+                        .strip_prefix(&root)
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| f.from.display().to_string());
+                    let to = f.to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let ok = f.problem.is_none();
+                    if ui
+                        .add_enabled(ok, egui::Checkbox::new(&mut f.include, ""))
+                        .on_hover_text("Rename this folder too")
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    ui.label(RichText::new("Folder").strong());
+                    ui.label(from);
+                    ui.label("⏵");
+                    ui.label(RichText::new(to).color(if ok { green() } else { amber() }).strong());
+                    match &f.problem {
+                        Some(p) => ui.label(RichText::new(p).color(amber())),
+                        None => ui.label(RichText::new(&f.why).weak()),
+                    };
+                });
+            }
+        });
+        if changed {
+            self.plex.plan_dirty = true;
+        }
+        ui.separator();
+    }
+}
+
 /// The Why column: a short line for the table and the full reasoning for the
 /// tooltip / editor, in plain words.
 fn why_text(r: &plex::Row, rows: &[plex::Row]) -> (String, String) {
     if let Some(v) = r.subtitle_of.and_then(|v| rows.get(v)) {
         let name = v.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let tags = if r.sub_tags.is_empty() { String::new() } else { format!(" (language/flags: {})", r.sub_tags.join(".")) };
+        let tags =
+            if r.sub_tags.is_empty() { String::new() } else { format!(" (language/flags: {})", r.sub_tags.join(".")) };
         let t = format!("subtitle with the same name as {name} -> follows it{tags}");
         return (t.clone(), t);
     }
@@ -1463,14 +1628,11 @@ impl App {
         ui.label(RichText::new(&name).monospace());
         {
             let (_, full) = why_text(&self.plex.rows[i], &self.plex.rows);
-            egui::CollapsingHeader::new("Why this suggestion")
-                .id_salt("plex-why")
-                .default_open(true)
-                .show(ui, |ui| {
-                    for line in full.lines().skip(1) {
-                        ui.label(RichText::new(line).small());
-                    }
-                });
+            egui::CollapsingHeader::new("Why this suggestion").id_salt("plex-why").default_open(true).show(ui, |ui| {
+                for line in full.lines().skip(1) {
+                    ui.label(RichText::new(line).small());
+                }
+            });
         }
         ui.separator();
         if let Some(v) = video_of {
@@ -1699,16 +1861,30 @@ impl App {
                     let coll = plan
                         .map(|p| p.items.iter().filter(|i| i.status == Status::Move && i.renamed_for_collision).count())
                         .unwrap_or(0);
-                    let dest = if self.s.plex.in_place {
-                        format!("inside {}", self.s.plex.source.trim())
-                    } else {
-                        "into your library folders".to_string()
-                    };
-                    (
-                        "Move files into the Plex layout?".to_string(),
+                    let rename_only = self.plex.scanned_mode == PlexMode::RenameOnly;
+                    let dirs = plan
+                        .map(|p| p.items.iter().filter(|i| i.is_dir && i.status == Status::Move).count())
+                        .unwrap_or(0);
+                    let dest = if rename_only {
                         format!(
-                            "{n} files will be renamed and moved {dest}.{}\n\nExisting files are never overwritten. \
-                             An undo log is written first, so “Undo last run” can move everything back.",
+                            "files will be renamed in the folders they are in now{}",
+                            if dirs > 0 { format!(", and {dirs} folders renamed") } else { String::new() }
+                        )
+                    } else if self.s.plex.in_place {
+                        format!("files will be renamed and moved inside {}", self.s.plex.source.trim())
+                    } else {
+                        "files will be renamed and moved into your library folders".to_string()
+                    };
+                    let n = n - dirs;
+                    (
+                        if rename_only {
+                            "Rename files?".to_string()
+                        } else {
+                            "Move files into the Plex layout?".to_string()
+                        },
+                        format!(
+                            "{n} {dest}.{}\n\nExisting files and folders are never overwritten. \
+                             An undo log is written first, so “Undo last run” can put everything back.",
                             if coll > 0 {
                                 format!(" {coll} get a number added because the name is taken.")
                             } else {

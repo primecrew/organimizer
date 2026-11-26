@@ -30,13 +30,14 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use eframe::egui::{
-    self, Align, Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Layout, Margin, RichText,
-    Stroke, TextStyle, Vec2,
+    self, Align, Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Layout, Margin,
+    RichText, Stroke, TextStyle, Vec2,
 };
 use egui_extras::{Column, TableBuilder};
 
 use organimizer::date_source::{DateMode, Fallback, SourceKind};
 use organimizer::filename_date::DateOrder;
+use organimizer::filetypes::{Filter, TypeGroup};
 use organimizer::ops::{self, RunReport, UndoReport};
 use organimizer::plan::{self, Plan, PlanOptions, Status};
 use organimizer::rename::{
@@ -44,7 +45,6 @@ use organimizer::rename::{
     NumberSystem, NumberingRule, Occurrence, PaddingRule, ParentRule, Position, RULE_TYPES, RandomizeRule,
     RearrangeRule, ReformatDateRule, RemoveMode, ReplaceRule, RuleKind, RuleSpec, StripRule,
 };
-use organimizer::filetypes::{Filter, TypeGroup};
 use organimizer::scan;
 use organimizer::settings::{self, Loaded, PresetScope, Settings, Theme};
 use organimizer::template::{self as tpl, FolderBuilder, MonthStyle, PartOrder, Separator, YearStyle};
@@ -326,7 +326,9 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, loaded: Loaded) -> Self {
         install_fonts(&cc.egui_ctx);
-        let s = loaded.settings;
+        let mut s = loaded.settings;
+        // 3.0.6: start with empty Source boxes; the last folders are in Recent
+        s.start_blank();
         let mut order_ui: Vec<(SourceKind, bool)> = s.date.auto_order.iter().map(|k| (*k, true)).collect();
         for k in SourceKind::ALL {
             if !s.date.auto_order.contains(&k) {
@@ -559,6 +561,7 @@ impl App {
             return;
         }
         self.s.last_folder = dir.to_string_lossy().into_owned();
+        organimizer::settings::push_recent(&mut self.s.recent_folders, &self.s.last_folder);
         self.status = format!("Selected {}", dir.display());
         // Browse / drop: fold step 1 to its one-line summary (folder shown
         // there) so steps 2 and 3 fit without scrolling; click it to reopen.
@@ -1994,8 +1997,11 @@ impl App {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let side = (self.s.font_size * 2.6).clamp(32.0, 64.0);
-                ui.add(egui::Image::new(&self.icon_tex).fit_to_exact_size(Vec2::splat(side)))
-                    .on_hover_text(format!("{} by {}", about::title_with_version(), about::PUBLISHER));
+                ui.add(egui::Image::new(&self.icon_tex).fit_to_exact_size(Vec2::splat(side))).on_hover_text(format!(
+                    "{} by {}",
+                    about::title_with_version(),
+                    about::PUBLISHER
+                ));
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(about::PRODUCT).heading().strong());
@@ -2053,7 +2059,9 @@ impl App {
                     ui.add(egui::Spinner::new());
                     let (t, f) = &self.plex.progress;
                     ui.add(egui::ProgressBar::new(*f).desired_width(220.0).show_percentage().animate(true));
-                    ui.add(egui::Label::new(if t.is_empty() { self.plex.status.as_str() } else { t.as_str() }).truncate());
+                    ui.add(
+                        egui::Label::new(if t.is_empty() { self.plex.status.as_str() } else { t.as_str() }).truncate(),
+                    );
                 } else if self.busy() && self.mode == Mode::Organize {
                     ui.add(egui::Spinner::new());
                     ui.add(egui::ProgressBar::new(self.progress).desired_width(220.0).show_percentage().animate(true));
@@ -2216,7 +2224,11 @@ impl App {
                 let fs = self.s.font_size;
                 for (m, label, tip) in [
                     (Mode::Organize, "Organize", "Rename files with rules and sort them into date folders"),
-                    (Mode::Plex, "Plex Media", "Analyze movies and TV episodes and move them into the layout Plex expects"),
+                    (
+                        Mode::Plex,
+                        "Plex Media",
+                        "Analyze movies and TV episodes and move them into the layout Plex expects",
+                    ),
                 ] {
                     let sel = self.mode == m;
                     let text = RichText::new(label).size(fs * 1.1).strong();
@@ -2230,7 +2242,9 @@ impl App {
                                 "Plex Media: choose the folder with your movies / TV episodes and click Scan.".into()
                             }
                             Mode::Plex => self.plex.status.clone(),
-                            Mode::Organize => "Organize: the preview updates live; nothing changes until you click Apply.".into(),
+                            Mode::Organize => {
+                                "Organize: the preview updates live; nothing changes until you click Apply.".into()
+                            }
                         };
                     }
                 }
@@ -2251,13 +2265,16 @@ impl App {
                 if ui.button("📂 Browse…").on_hover_text("File > Open Folder… (Ctrl+O)").clicked() {
                     self.browse_folder();
                 }
-                let star_w = self.s.font_size * 2.2;
+                let star_w = self.s.font_size * 8.0;
                 ui.add(
                     egui::TextEdit::singleline(&mut self.s.last_folder)
                         .hint_text("…or drop a folder here")
                         .desired_width((ui.available_width() - star_w).max(80.0)),
                 )
                 .on_hover_text("Folder to rename / sort; type or paste a path, or drag a folder onto the window");
+                if let Some(p) = v3::recent_menu(ui, &self.s.recent_folders) {
+                    self.set_folder(Path::new(&p));
+                }
                 let cur = self.s.last_folder.clone();
                 self.star_button(ui, &cur);
             });
@@ -2449,7 +2466,10 @@ impl App {
                     }
                 });
                 if !self.s.rules.is_empty()
-                    && ui.button("Clear all…").on_hover_text("Remove every rule from the list (asks first; no files are touched)").clicked()
+                    && ui
+                        .button("Clear all…")
+                        .on_hover_text("Remove every rule from the list (asks first; no files are touched)")
+                        .clicked()
                 {
                     self.dialog = Some(Dialog::ClearRules(self.s.rules.len()));
                 }
@@ -2571,8 +2591,9 @@ impl App {
                     .open(Some(more_open))
                     .show(ui, |ui| {
                         egui::Grid::new("more-opts").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-                            ui.label("If no date found")
-                                .on_hover_text("When the date source finds nothing; “Skip” leaves the file where it is.");
+                            ui.label("If no date found").on_hover_text(
+                                "When the date source finds nothing; “Skip” leaves the file where it is.",
+                            );
                             egui::ComboBox::from_id_salt("fallback")
                                 .width(180.0)
                                 .selected_text(self.s.date.fallback.label())

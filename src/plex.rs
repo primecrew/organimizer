@@ -23,7 +23,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::filetypes::VIDEO_EXTS;
-use crate::plan::{Plan, PlanItem, Status, split_name, unique_dest_for};
+use crate::plan::{Plan, PlanItem, Status, same_file, split_name, unique_dest_for};
 
 pub const SUBTITLE_EXTS: &[&str] = &["srt", "ass", "ssa", "sub", "idx", "vtt", "sup", "smi"];
 
@@ -286,7 +286,8 @@ pub fn tidy(s: &str) -> String {
 pub fn smart_case(s: &str) -> String {
     let letters: Vec<char> = s.chars().filter(|c| c.is_alphabetic()).collect();
     let all_lower = letters.iter().all(|c| c.is_lowercase());
-    let all_upper = letters.len() > 4 && letters.iter().all(|c| c.is_uppercase()) && !s.contains('.') && !s.contains('-');
+    let all_upper =
+        letters.len() > 4 && letters.iter().all(|c| c.is_uppercase()) && !s.contains('.') && !s.contains('-');
     if !(all_lower || all_upper) {
         return s.to_string();
     }
@@ -428,9 +429,25 @@ fn keyword_quote(s: &str) -> Option<String> {
     let l = format!(" {} ", s.to_lowercase().replace(['.', '_', '-', '(', ')', '[', ']'], " "));
     let l = SPACES.replace_all(&l, " ");
     [
-        "behind the scenes", "making of", "deleted scenes", "deleted scene", "gag reel", "short film", "trailer",
-        "teaser", "bts", "deleted", "featurette", "featurettes", "interview", "interviews", "bloopers", "blooper",
-        "outtakes", "bonus", "trailers",
+        "behind the scenes",
+        "making of",
+        "deleted scenes",
+        "deleted scene",
+        "gag reel",
+        "short film",
+        "trailer",
+        "teaser",
+        "bts",
+        "deleted",
+        "featurette",
+        "featurettes",
+        "interview",
+        "interviews",
+        "bloopers",
+        "blooper",
+        "outtakes",
+        "bonus",
+        "trailers",
     ]
     .iter()
     .find(|w| l.contains(&format!(" {w} ")))
@@ -704,7 +721,11 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         a.title = tidy(stem);
         a.confidence = Confidence::High;
         a.notes.push("Sample clip: left where it is".into());
-        a.because(if SAMPLE.is_match(stem) { "\"sample\" in the name: a preview clip, not moved" } else { "in a Sample folder: a preview clip, not moved" });
+        a.because(if SAMPLE.is_match(stem) {
+            "\"sample\" in the name: a preview clip, not moved"
+        } else {
+            "in a Sample folder: a preview clip, not moved"
+        });
         return a;
     }
 
@@ -787,7 +808,11 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         let why = if kind == dir_kind {
             format!("in a \"{parent}\" folder -> {}", kind.folder())
         } else {
-            format!("in a \"{parent}\" folder and {} in the name -> {}", keyword_quote(stem).unwrap_or_default(), kind.folder())
+            format!(
+                "in a \"{parent}\" folder and {} in the name -> {}",
+                keyword_quote(stem).unwrap_or_default(),
+                kind.folder()
+            )
         };
         return extra_analysis(kind, stem, &folder_title, folder_year, Confidence::High, why);
     }
@@ -919,7 +944,10 @@ pub fn analyze(folders: &[String], file_name: &str) -> Analysis {
         a.because(format!("edition \"{e}\" in the name"));
     }
     if kw.is_some() {
-        a.because(format!("{} in the name, but it has its own year: kept as a movie", keyword_quote(stem).unwrap_or_default()));
+        a.because(format!(
+            "{} in the name, but it has its own year: kept as a movie",
+            keyword_quote(stem).unwrap_or_default()
+        ));
         a.notes.push("Name mentions an extra (trailer, interview...): check the type".into());
         a.confidence = a.confidence.min(Confidence::Medium);
     }
@@ -1233,6 +1261,10 @@ fn dir_of(p: &Path) -> PathBuf {
 /// Build the preview rows for scanned files (videos and subtitles; other
 /// files are ignored).
 pub fn analyze_files(root: &Path, files: &[PathBuf]) -> Vec<Row> {
+    analyze_files_with(root, files, folder_chain)
+}
+
+fn analyze_files_with(root: &Path, files: &[PathBuf], chain: fn(&Path, &Path) -> Vec<String>) -> Vec<Row> {
     let mut rows: Vec<Row> = vec![];
     let mut subs: Vec<&PathBuf> = vec![];
     for f in files {
@@ -1240,7 +1272,7 @@ pub fn analyze_files(root: &Path, files: &[PathBuf]) -> Vec<Row> {
         let (_, ext) = split_name(&name);
         let ext = ext.trim_start_matches('.');
         if is_video(ext) {
-            let a = analyze(&folder_chain(root, f), &name);
+            let a = analyze(&chain(root, f), &name);
             rows.push(Row {
                 source: f.clone(),
                 include: a.kind != Kind::Skip,
@@ -1468,10 +1500,15 @@ fn refine_by_runtime(rows: &mut [Row]) {
             );
             let mut a = extra_analysis(kind, &stem, &title, year, conf, why);
             // keep the disc-rip reasons, drop "-> movie"
-            for w in old_why.into_iter().filter(|w| w.starts_with("inside a disc rip") || w.starts_with("disc-rip track")) {
+            for w in
+                old_why.into_iter().filter(|w| w.starts_with("inside a disc rip") || w.starts_with("disc-rip track"))
+            {
                 a.because(w);
             }
-            if looks_generic(&stem) || DISC_TRACK_SUFFIX.is_match(&stem) || a.extra_name.as_deref().map(norm) == Some(norm(&title)) {
+            if looks_generic(&stem)
+                || DISC_TRACK_SUFFIX.is_match(&stem)
+                || a.extra_name.as_deref().map(norm) == Some(norm(&title))
+            {
                 let n = if by_runtime { crate::duration::label(v).replace(':', ".") } else { stem.clone() };
                 a.extra_name = Some(format!("{} {n}", kind.singular()));
             }
@@ -1576,6 +1613,292 @@ fn match_subtitle(sub: &Path, videos: &[Row]) -> (Option<usize>, Vec<String>) {
     (None, vec![])
 }
 
+// ---------------------------------------------------------------------------
+// Rename only (3.0.6): the folders are already right, only the file names
+// change. Nothing moves to another folder and no folder is created.
+// ---------------------------------------------------------------------------
+
+/// What the Plex tab does with the files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlexMode {
+    /// Rename each file where it is, using the show / season / movie
+    /// folders it is already in (the default: most libraries already have
+    /// the right folders).
+    #[default]
+    RenameOnly,
+    /// Build `Show (Year)\Season NN\` and `Movie (Year)\` (3.0.0-3.0.5).
+    FullSort,
+}
+
+impl PlexMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            PlexMode::RenameOnly => "Rename only",
+            PlexMode::FullSort => "Full sort",
+        }
+    }
+}
+
+re!(ID_TAG, r"(?i)\s*\{(?:tmdb|tvdb|imdb)-([a-z0-9]+)\}");
+re!(TMDB_TAG, r"(?i)\{tmdb-(\d+)\}");
+
+/// A show / movie folder name split into title, year and `{tmdb-ID}`.
+/// `{edition-...}`, `{imdb-...}` and `{tvdb-...}` tags are ignored.
+pub fn parse_title_folder(name: &str) -> (String, Option<u16>, Option<u64>) {
+    let tmdb = TMDB_TAG.captures(name).and_then(|c| c[1].parse().ok());
+    let plain = ID_TAG.replace_all(name, "");
+    let plain = EDITION_TAG.replace_all(&plain, "");
+    let (t, y) = title_and_year(plain.trim());
+    let t = if looks_generic(&t) { String::new() } else { t };
+    (t, y, tmdb)
+}
+
+fn name_of(p: &Path) -> String {
+    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// Folder names to analyze a file with in Rename only: like
+/// [`folder_chain`], but when the chosen folder is itself a Season, extras
+/// or disc folder the folders above it are included (so picking
+/// `Show (2008)\Season 02` still knows the show).
+pub fn rename_only_chain(root: &Path, file: &Path) -> Vec<String> {
+    let mut start = root.to_path_buf();
+    for _ in 0..3 {
+        let n = name_of(&start);
+        let inner = season_of_dir(&n).is_some() || extra_of_dir(&n).is_some() || DISC_DIR.is_match(n.trim());
+        match start.parent() {
+            Some(p) if inner && !name_of(p).is_empty() => start = p.to_path_buf(),
+            _ => break,
+        }
+    }
+    folder_chain(&start, file)
+}
+
+/// Like [`analyze_files`] for the chosen mode.
+pub fn analyze_files_mode(root: &Path, files: &[PathBuf], mode: PlexMode) -> Vec<Row> {
+    match mode {
+        PlexMode::FullSort => analyze_files(root, files),
+        PlexMode::RenameOnly => {
+            let mut rows = analyze_files_with(root, files, rename_only_chain);
+            rename_only_review(&mut rows);
+            rows
+        }
+    }
+}
+
+fn flag(a: &mut Analysis, note: impl Into<String>) {
+    let n = note.into();
+    if !a.notes.contains(&n) {
+        a.notes.push(n);
+    }
+    a.confidence = a.confidence.min(Confidence::Medium);
+}
+
+/// Rename only: take the show / season / movie from the folders the file
+/// is in (it stays there), and flag rows whose folders do not look right
+/// (Medium confidence + a note, so Look up asks for the name instead of
+/// guessing).
+pub fn rename_only_review(rows: &mut [Row]) {
+    for r in rows.iter_mut().filter(|r| r.subtitle_of.is_none()) {
+        let a = &mut r.analysis;
+        if !matches!(a.kind, Kind::Movie | Kind::Episode) || a.from_tmdb {
+            continue;
+        }
+        let parent = unit_dir(&r.source);
+        let pname = name_of(&parent);
+        let (title_dir, season_dir) = match season_of_dir(&pname) {
+            Some(sn) if a.kind == Kind::Episode => (parent.parent().map(Path::to_path_buf), Some(sn)),
+            _ => (Some(parent.clone()), None),
+        };
+        let (ft, fy, ftmdb) = title_dir.as_deref().map(|d| parse_title_folder(&name_of(d))).unwrap_or_default();
+        let what = if a.kind == Kind::Episode { "show" } else { "movie" };
+        if ft.is_empty() {
+            if a.kind == Kind::Episode && season_dir.is_some() {
+                flag(a, "Rename only: this Season folder is not inside a show folder: check the show name (Look up)");
+            } else {
+                flag(a, format!("Rename only: not inside its own {what} folder: check the name (Look up)"));
+            }
+        } else if a.title.is_empty() || norm(&a.title) == norm(&ft) || (a.kind == Kind::Episode && season_dir.is_some())
+        {
+            let differs = !a.title.is_empty() && norm(&a.title) != norm(&ft);
+            let old = std::mem::replace(&mut a.title, ft.clone());
+            if fy.is_some() {
+                a.year = fy;
+            }
+            a.tmdb_id = ftmdb.or(a.tmdb_id);
+            a.because(format!(
+                "Rename only: {what} name from its folder \"{}\"",
+                name_of(title_dir.as_deref().unwrap_or(&parent))
+            ));
+            if differs {
+                flag(a, format!("Rename only: the file name says \"{old}\", the folder says \"{ft}\""));
+            }
+        } else {
+            flag(
+                a,
+                format!(
+                    "Rename only: the folder \"{}\" does not match \"{}\": check the name (Look up)",
+                    name_of(title_dir.as_deref().unwrap_or(&parent)),
+                    a.title
+                ),
+            );
+        }
+        if let Some(sn) = season_dir {
+            if a.season.is_some() && a.season != Some(sn) && a.air_date.is_none() {
+                flag(
+                    a,
+                    format!(
+                        "Rename only: the file name says season {}, the folder says Season {sn:02}",
+                        a.season.unwrap_or(0)
+                    ),
+                );
+            }
+            a.season = Some(sn);
+        } else if a.kind == Kind::Episode && a.air_date.is_none() {
+            flag(a, "Rename only: not inside a Season folder (Plex expects Show\\Season NN)");
+        }
+        if a.year.is_none() && a.tmdb_id.is_none() && !a.title.is_empty() {
+            flag(a, format!("Rename only: no year for this {what}: add it, or look it up"));
+        }
+        r.detected = r.analysis.clone();
+    }
+}
+
+fn inline_suffix(k: ExtraKind) -> &'static str {
+    match k {
+        ExtraKind::BehindTheScenes => "behindthescenes",
+        ExtraKind::DeletedScenes => "deleted",
+        ExtraKind::Featurettes => "featurette",
+        ExtraKind::Interviews => "interview",
+        ExtraKind::Scenes => "scene",
+        ExtraKind::Shorts => "short",
+        ExtraKind::Trailers => "trailer",
+        ExtraKind::Other => "other",
+    }
+}
+
+/// Rename only: the new file name for a video in `dir` (its own folder).
+/// Extras inside a matching extras folder get the plain name; extras
+/// anywhere else keep Plex's inline suffix (`Name-trailer.mkv`).
+pub fn rename_only_name(a: &Analysis, ext: &str, dir: &Path) -> Option<String> {
+    let rel = relative_path(a, ext)?;
+    if a.kind == Kind::Extra {
+        let k = a.extra.unwrap_or(ExtraKind::Other);
+        if extra_of_dir(&name_of(dir)) != Some(k) {
+            let n = a.extra_name.as_deref().map(safe_component).filter(|n| !n.is_empty());
+            let n = n.unwrap_or_else(|| k.singular().to_string());
+            return Some(format!("{n}-{}{}", inline_suffix(k), ext.to_lowercase()));
+        }
+    }
+    rel.file_name().map(|n| n.to_string_lossy().into_owned())
+}
+
+/// A folder rename offered in Rename only (`Season 2` -> `Season 02`,
+/// adding the year / `{tmdb-ID}`, official extras folder names). Shown as
+/// its own preview row, unticked by default.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FolderFix {
+    pub from: PathBuf,
+    /// Same parent, new name.
+    pub to: PathBuf,
+    pub why: String,
+    pub include: bool,
+    /// Why it cannot be done (name taken, ...): never applied.
+    pub problem: Option<String>,
+}
+
+/// Folder-name fixes for Rename only, deepest folder first (that is the
+/// order they are applied in, after all file renames). Only folders
+/// strictly inside `root` are offered: the chosen folder itself holds the
+/// undo log, so it is never renamed.
+pub fn folder_fixes(root: &Path, rows: &[Row]) -> Vec<FolderFix> {
+    let mut out: Vec<FolderFix> = vec![];
+    let key = |p: &Path| p.to_string_lossy().to_lowercase();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut add = |from: &Path, to_name: String, why: String, out: &mut Vec<FolderFix>| {
+        let to_name = safe_component(&to_name);
+        if to_name.is_empty() || name_of(from) == to_name || from == root || !from.starts_with(root) {
+            return;
+        }
+        if !seen.insert(key(from)) {
+            return;
+        }
+        let to = from.with_file_name(&to_name);
+        out.push(FolderFix { from: from.to_path_buf(), to, why, include: false, problem: None });
+    };
+    for r in rows.iter().filter(|r| r.subtitle_of.is_none() && r.include) {
+        let a = &r.analysis;
+        if missing(a).is_some() {
+            continue;
+        }
+        let dir = unit_dir(&r.source);
+        let dname = name_of(&dir);
+        let title_dir = match a.kind {
+            Kind::Episode => match season_of_dir(&dname) {
+                Some(sn) => {
+                    if Some(sn) == a.season {
+                        let want = format!("Season {sn:02}");
+                        let why = if sn == 0 && !dname.to_lowercase().starts_with("season") {
+                            "Plex keeps specials in \"Season 00\"".to_string()
+                        } else {
+                            "Plex season folders are \"Season NN\"".to_string()
+                        };
+                        add(&dir, want, why, &mut out);
+                    }
+                    dir.parent().map(Path::to_path_buf)
+                }
+                None => Some(dir.clone()),
+            },
+            Kind::Movie => Some(dir.clone()),
+            Kind::Extra => {
+                if let (Some(k), Some(dk)) = (a.extra, extra_of_dir(&dname))
+                    && k == dk
+                {
+                    add(&dir, k.folder().to_string(), "official Plex extras folder name".into(), &mut out);
+                }
+                None
+            }
+            Kind::Skip => None,
+        };
+        let Some(td) = title_dir else { continue };
+        let tname = name_of(&td);
+        let (ft, fy, ftmdb) = parse_title_folder(&tname);
+        if ft.is_empty() || norm(&ft) != norm(&a.title) {
+            continue;
+        }
+        let add_year = fy.is_none() && a.year.is_some();
+        let add_tmdb = ftmdb.is_none() && a.tmdb_id.is_some();
+        if !add_year && !add_tmdb {
+            continue;
+        }
+        let mut want = safe_component(&name_with_year(&ft, a.year.or(fy)));
+        if let Some(m) = EDITION_TAG.find(&tname) {
+            want.push(' ');
+            want.push_str(m.as_str());
+        }
+        if let Some(id) = ftmdb.or(a.tmdb_id) {
+            want.push_str(&format!(" {{tmdb-{id}}}"));
+        }
+        let why = match (add_year, add_tmdb) {
+            (true, true) => "adds the year and the TMDB id",
+            (true, false) => "adds the year",
+            _ => "adds the TMDB id (Plex then skips its own guess)",
+        };
+        add(&td, want, why.into(), &mut out);
+    }
+    // never onto something that exists, never two folders to one name
+    let mut targets: HashSet<String> = HashSet::new();
+    for f in out.iter_mut() {
+        if f.to.exists() && !same_file(&f.from, &f.to) {
+            f.problem = Some("A folder or file with that name already exists: left as it is".into());
+        } else if !targets.insert(key(&f.to)) {
+            f.problem = Some("Another folder gets the same name: left as it is".into());
+        }
+    }
+    out.sort_by_key(|f| std::cmp::Reverse(f.from.components().count()));
+    out
+}
+
 /// Where the files go. `None` = in place (inside the scanned folder).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Destination {
@@ -1598,6 +1921,15 @@ impl Destination {
 /// final name of their video, including a " (1)" collision suffix. Items
 /// are returned in row order.
 pub fn build_plan(root: &Path, rows: &[Row], dest: &Destination) -> Plan {
+    build_plan_mode(root, rows, dest, PlexMode::FullSort, &[])
+}
+
+/// [`build_plan`] for either mode. Rename only: every file keeps its
+/// folder (`dest` is ignored) and the ticked `fixes` are added after all
+/// file items, deepest folder first, so file names are computed with the
+/// folder names as they are now and the folders are renamed last.
+pub fn build_plan_mode(root: &Path, rows: &[Row], dest: &Destination, mode: PlexMode, fixes: &[FolderFix]) -> Plan {
+    let rename_only = mode == PlexMode::RenameOnly;
     let mut reserved: HashSet<String> = HashSet::new();
     let key = |p: &Path| p.to_string_lossy().to_lowercase();
     let mut video_final: HashMap<usize, (PathBuf, PathBuf)> = HashMap::new();
@@ -1622,10 +1954,24 @@ pub fn build_plan(root: &Path, rows: &[Row], dest: &Destination) -> Plan {
             renamed_for_collision: false,
             status: Status::Unchanged,
             warnings: vec![],
+            is_dir: false,
         };
         let (lib_root, rel) = match r.subtitle_of {
+            None if rename_only => {
+                (current_dir.clone(), rename_only_name(&r.analysis, ext, &current_dir).map(PathBuf::from))
+            }
             None => (dest.root_for(library_of(&r.analysis), root), relative_path(&r.analysis, ext)),
             Some(v) => match video_final.get(&v) {
+                Some((_, vp)) if rename_only => {
+                    // a subtitle stays in its own folder, named after its video
+                    let mut n = file_stem_of(vp);
+                    for t in &r.sub_tags {
+                        n.push('.');
+                        n.push_str(t);
+                    }
+                    n.push_str(&ext.to_lowercase());
+                    (current_dir.clone(), Some(PathBuf::from(n)))
+                }
                 Some((vroot, vp)) => {
                     let mut n = file_stem_of(vp);
                     for t in &r.sub_tags {
@@ -1678,7 +2024,41 @@ pub fn build_plan(root: &Path, rows: &[Row], dest: &Destination) -> Plan {
         }
         by_index[i] = Some(item);
     }
-    Plan { root: root.to_path_buf(), items: by_index.into_iter().flatten().collect() }
+    let mut items: Vec<PlanItem> = by_index.into_iter().flatten().collect();
+    if rename_only {
+        items.extend(fixes.iter().map(folder_fix_item));
+    }
+    Plan { root: root.to_path_buf(), items }
+}
+
+fn folder_fix_item(f: &FolderFix) -> PlanItem {
+    let parent = dir_of(&f.from);
+    let mut warnings = vec![];
+    let status = match (&f.problem, f.include) {
+        (Some(p), _) => {
+            warnings.push(p.clone());
+            Status::Unchanged
+        }
+        (None, false) => {
+            warnings.push("Not ticked".into());
+            Status::Unchanged
+        }
+        (None, true) => Status::Move,
+    };
+    PlanItem {
+        source: f.from.clone(),
+        current_dir: parent.clone(),
+        base_dir: parent.clone(),
+        date: None,
+        new_name: name_of(&f.to),
+        dest_folder_name: String::new(),
+        dest_dir: parent,
+        dest_path: f.to.clone(),
+        renamed_for_collision: false,
+        status,
+        warnings,
+        is_dir: true,
+    }
 }
 
 #[cfg(test)]
@@ -1711,7 +2091,10 @@ mod tests {
                 "Movies/The Dark Knight (2008)/The Dark Knight (2008) - pt2.mp4",
                 "The Dark Knight (2008)/The Dark Knight (2008) - pt2.mp4",
             ),
-            ("Movies/The Dark Knight (2008)/The Dark Knight (2008) - cd1.mkv", "The Dark Knight (2008)/The Dark Knight (2008) - cd1.mkv"),
+            (
+                "Movies/The Dark Knight (2008)/The Dark Knight (2008) - cd1.mkv",
+                "The Dark Knight (2008)/The Dark Knight (2008) - cd1.mkv",
+            ),
             ("Downloads/Inception (2010) [1080p] [YTS.MX].mp4", "Inception (2010)/Inception (2010).mp4"),
             (
                 "Downloads/blade_runner_2049_2017_2160p_uhd_bluray_hevc.mkv",
@@ -2107,7 +2490,11 @@ mod recognition_tests {
         let t1 = row(&rows, "title_t01.mkv");
         assert_eq!(t1.analysis.extra, Some(ExtraKind::Featurettes));
         assert_eq!(rel_of(t1), "Alien (1979)/Featurettes/Featurette 8.00.mkv");
-        assert!(t1.analysis.why_text().contains("shorter (8:00) than title_t00.mkv (1:57:00)"), "{}", t1.analysis.why_text());
+        assert!(
+            t1.analysis.why_text().contains("shorter (8:00) than title_t00.mkv (1:57:00)"),
+            "{}",
+            t1.analysis.why_text()
+        );
         assert_eq!(row(&rows, "title_t02.mkv").analysis.extra, Some(ExtraKind::Trailers));
         assert_eq!(row(&rows, "title_t03.mkv").analysis.extra, Some(ExtraKind::Other));
     }
@@ -2153,7 +2540,10 @@ mod recognition_tests {
         assert_eq!(m.analysis.extra, Some(ExtraKind::BehindTheScenes));
         assert_eq!(rel_of(m), "Alien (1979)/Behind The Scenes/Making of.mkv");
         let why = m.analysis.why_text();
-        assert!(why.contains("runtime 8:00") && why.contains("\"making of\"") && why.contains("Alien (1979).mkv"), "{why}");
+        assert!(
+            why.contains("runtime 8:00") && why.contains("\"making of\"") && why.contains("Alien (1979).mkv"),
+            "{why}"
+        );
         let del = row(&rows, "Chestburster alt.mkv");
         assert_eq!(rel_of(del), "Alien (1979)/Deleted Scenes/Chestburster alt.mkv");
         assert!(del.analysis.why_text().contains("in a \"Deleted Scenes\" folder"), "{}", del.analysis.why_text());
@@ -2163,10 +2553,7 @@ mod recognition_tests {
 
     #[test]
     fn episodes_explain_season_and_show() {
-        let a = analyze(
-            &["TV".into(), "The Expanse".into(), "Season 2".into()],
-            "The.Expanse.S02E05.Home.1080p.mkv",
-        );
+        let a = analyze(&["TV".into(), "The Expanse".into(), "Season 2".into()], "The.Expanse.S02E05.Home.1080p.mkv");
         let why = a.why_text();
         assert!(why.contains("\"S02E05\" in the name -> TV episode"), "{why}");
         assert!(why.contains("Season 2"), "{why}");
@@ -2178,7 +2565,10 @@ mod recognition_tests {
     #[test]
     fn official_plex_split_parts_and_numbered_extras() {
         assert_eq!(take_stack("The Dark Knight (2008) - pt1"), ("The Dark Knight (2008)".into(), Some("pt1".into())));
-        assert_eq!(take_stack("The Dark Knight (2008) - part2"), ("The Dark Knight (2008)".into(), Some("part2".into())));
+        assert_eq!(
+            take_stack("The Dark Knight (2008) - part2"),
+            ("The Dark Knight (2008)".into(), Some("part2".into()))
+        );
         assert_eq!(take_stack("Apartment (1960)"), ("Apartment (1960)".into(), None));
         assert_eq!(take_stack("The Party (1968)"), ("The Party (1968)".into(), None));
         let a = analyze(&["Movies".into(), "The Dark Knight (2008)".into()], "The Dark Knight (2008) - disc1.mkv");
@@ -2195,5 +2585,241 @@ mod recognition_tests {
         assert_eq!(rel("Movies/Avatar (2009)/Bar Fight-deleted1.mp4"), "Avatar (2009)/Deleted Scenes/Bar Fight 1.mp4");
         assert_eq!(rel("Movies/Avatar (2009)/Bar Fight-deleted2.mp4"), "Avatar (2009)/Deleted Scenes/Bar Fight 2.mp4");
         assert_eq!(rel("Movies/Avatar (2009)/Teaser Trailer-trailer.mp4"), "Avatar (2009)/Trailers/Teaser Trailer.mp4");
+    }
+}
+
+#[cfg(test)]
+mod rename_only_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    fn touch(p: &Path) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"x").unwrap();
+    }
+
+    fn scan(root: &Path) -> Vec<Row> {
+        let mut files = vec![];
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() { stack.push(p) } else { files.push(p) }
+            }
+        }
+        files.sort();
+        analyze_files_mode(root, &files, PlexMode::RenameOnly)
+    }
+
+    /// (source relative to `base`, destination relative to `base`) per file item.
+    fn moves(plan: &Plan, base: &Path) -> Vec<(String, String)> {
+        let rel = |p: &Path| p.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
+        plan.items
+            .iter()
+            .filter(|i| i.status == Status::Move && !i.is_dir)
+            .map(|i| (rel(&i.source), rel(&i.dest_path)))
+            .collect()
+    }
+
+    fn row<'a>(rows: &'a [Row], name: &str) -> &'a Row {
+        rows.iter().find(|r| r.source.ends_with(name)).unwrap()
+    }
+
+    #[test]
+    fn rename_only_is_the_default_mode() {
+        assert_eq!(PlexMode::default(), PlexMode::RenameOnly);
+    }
+
+    #[test]
+    fn inside_a_season_folder() {
+        let d = tempfile::tempdir().unwrap();
+        let show = d.path().join("Breaking Bad (2008) {tmdb-1396}");
+        let season = show.join("Season 2");
+        touch(&season.join("breaking.bad.s02e05.720p.WEB-DL.mkv"));
+        touch(&season.join("breaking.bad.s02e05.720p.WEB-DL.en.srt"));
+        touch(&season.join("Episode 6.mkv"));
+        // the user picked the Season folder itself
+        let rows = scan(&season);
+        let a = &row(&rows, "breaking.bad.s02e05.720p.WEB-DL.mkv").analysis;
+        assert_eq!((a.title.as_str(), a.year, a.season, a.tmdb_id), ("Breaking Bad", Some(2008), Some(2), Some(1396)));
+        assert_eq!(a.confidence, Confidence::High, "{:?}", a.notes);
+        let fixes = folder_fixes(&season, &rows);
+        assert!(fixes.is_empty(), "the chosen folder itself is never renamed: {fixes:?}");
+        let plan = build_plan_mode(&season, &rows, &Destination::default(), PlexMode::RenameOnly, &fixes);
+        let mut m = moves(&plan, &season);
+        m.sort();
+        assert_eq!(
+            m,
+            vec![
+                ("Episode 6.mkv".into(), "Breaking Bad (2008) - s02e06.mkv".into()),
+                ("breaking.bad.s02e05.720p.WEB-DL.en.srt".into(), "Breaking Bad (2008) - s02e05.en.srt".into()),
+                ("breaking.bad.s02e05.720p.WEB-DL.mkv".into(), "Breaking Bad (2008) - s02e05.mkv".into()),
+            ]
+        );
+        assert!(plan.items.iter().all(|i| i.dest_dir == season), "nothing moves to another folder");
+    }
+
+    #[test]
+    fn show_folder_with_season_and_specials_folders() {
+        let d = tempfile::tempdir().unwrap();
+        let show = d.path().join("Lost (2004)");
+        touch(&show.join("Season 1/Lost.S01E02.Tabula.Rasa.mkv"));
+        touch(&show.join("Specials/Lost.S00E01.mkv"));
+        touch(&show.join("Season 03/Lost (2004) - s03e01 - A Tale of Two Cities.mkv"));
+        touch(&show.join("Featurettes/Making Lost.mkv"));
+        let rows = scan(&show);
+        let fixes = folder_fixes(&show, &rows);
+        let names: Vec<(String, String)> = fixes.iter().map(|f| (name_of(&f.from), name_of(&f.to))).collect();
+        assert!(names.contains(&("Season 1".into(), "Season 01".into())), "{names:?}");
+        assert!(names.contains(&("Specials".into(), "Season 00".into())), "{names:?}");
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(fixes.iter().all(|f| !f.include && f.problem.is_none()), "folder fixes are unticked by default");
+        let plan = build_plan_mode(&show, &rows, &Destination::default(), PlexMode::RenameOnly, &fixes);
+        let m = moves(&plan, &show);
+        assert!(
+            m.contains(&(
+                "Season 1/Lost.S01E02.Tabula.Rasa.mkv".into(),
+                "Season 1/Lost (2004) - s01e02 - Tabula Rasa.mkv".into()
+            )),
+            "{m:?}"
+        );
+        assert!(m.contains(&("Specials/Lost.S00E01.mkv".into(), "Specials/Lost (2004) - s00e01.mkv".into())), "{m:?}");
+        // already named: nothing to do; the extra keeps its folder and name
+        assert!(!m.iter().any(|(s, _)| s.starts_with("Season 03") || s.starts_with("Featurettes")), "{m:?}");
+        let dirs: Vec<&PlanItem> = plan.items.iter().filter(|i| i.is_dir).collect();
+        assert_eq!(dirs.len(), 2);
+        assert!(dirs.iter().all(|i| i.status == Status::Unchanged), "unticked folder rows do nothing");
+    }
+
+    #[test]
+    fn library_root_with_shows_and_movies() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("TV/The Wire (2002)/Season 01/the.wire.s01e01.mkv"));
+        touch(&r.join("Movies/Heat/Heat.1995.1080p.BluRay.x264.mkv"));
+        touch(&r.join("Movies/Heat/Heat.1995.1080p.BluRay.x264-trailer.mkv"));
+        touch(&r.join("Movies/Alien (1979)/Alien.1979.Directors.Cut.pt1.mkv"));
+        let rows = scan(r);
+        let plan = build_plan_mode(r, &rows, &Destination::default(), PlexMode::RenameOnly, &[]);
+        let mut m = moves(&plan, r);
+        m.sort();
+        assert!(
+            m.contains(&(
+                "TV/The Wire (2002)/Season 01/the.wire.s01e01.mkv".into(),
+                "TV/The Wire (2002)/Season 01/The Wire (2002) - s01e01.mkv".into()
+            )),
+            "{m:?}"
+        );
+        assert!(
+            m.contains(&("Movies/Heat/Heat.1995.1080p.BluRay.x264.mkv".into(), "Movies/Heat/Heat (1995).mkv".into())),
+            "{m:?}"
+        );
+        // an extra outside an extras folder keeps Plex's inline suffix
+        assert!(
+            m.iter().any(|(s, t)| s.ends_with("x264-trailer.mkv")
+                && t.starts_with("Movies/Heat/")
+                && t.ends_with("-trailer.mkv")),
+            "{m:?}"
+        );
+        assert!(
+            m.iter()
+                .any(|(_, t)| t.starts_with("Movies/Alien (1979)/Alien (1979) {edition-") && t.ends_with(" - pt1.mkv")),
+            "{m:?}"
+        );
+        // "Heat" -> "Heat (1995)" is offered (unticked); "Movies" / "TV" never
+        let fixes = folder_fixes(r, &rows);
+        let names: Vec<(String, String)> = fixes.iter().map(|f| (name_of(&f.from), name_of(&f.to))).collect();
+        assert_eq!(names, vec![("Heat".to_string(), "Heat (1995)".to_string())]);
+    }
+
+    #[test]
+    fn doubtful_folders_are_flagged_not_guessed() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("Downloads/Season 1/Lost.S01E04.mkv"));
+        touch(&r.join("Movies/Arrival.2016.mkv"));
+        touch(&r.join("Firefly/Season 1/Serenity.S01E02.mkv"));
+        let rows = scan(r);
+        let a = &row(&rows, "Lost.S01E04.mkv").analysis;
+        assert!(
+            a.confidence < Confidence::High && a.notes.iter().any(|n| n.contains("not inside a show folder")),
+            "{a:?}"
+        );
+        let a = &row(&rows, "Arrival.2016.mkv").analysis;
+        assert!(a.confidence < Confidence::High && a.notes.iter().any(|n| n.contains("own movie folder")), "{a:?}");
+        let a = &row(&rows, "Serenity.S01E02.mkv").analysis;
+        assert_eq!(a.title, "Firefly", "the file stays in Firefly\\Season 1");
+        assert!(a.confidence < Confidence::High, "file and folder disagree, and no year: {a:?}");
+        assert!(crate::lookup::needs_name_prompt(a.confidence), "Look up asks for the name");
+    }
+
+    #[test]
+    fn folder_fix_collision_is_flagged_and_never_applied() {
+        let d = tempfile::tempdir().unwrap();
+        let show = d.path().join("Lost (2004)");
+        touch(&show.join("Season 1/Lost.S01E02.mkv"));
+        std::fs::create_dir_all(show.join("Season 01")).unwrap();
+        let rows = scan(&show);
+        let mut fixes = folder_fixes(&show, &rows);
+        assert_eq!(fixes.len(), 1);
+        assert!(fixes[0].problem.is_some());
+        fixes[0].include = true;
+        let plan = build_plan_mode(&show, &rows, &Destination::default(), PlexMode::RenameOnly, &fixes);
+        assert!(plan.items.iter().filter(|i| i.is_dir).all(|i| i.status == Status::Unchanged));
+    }
+
+    #[test]
+    fn apply_with_folder_fixes_then_undo_restores_everything() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("TV");
+        touch(&root.join("Lost/Season 1/Lost.S01E02.mkv"));
+        touch(&root.join("Lost/Season 1/Lost.S01E02.eng.srt"));
+        touch(&root.join("Lost/Specials/Lost.S00E01.mkv"));
+        let mut rows = scan(&root);
+        // the user types the year (as the type-the-title prompt would)
+        for r in rows.iter_mut() {
+            r.analysis.year = Some(2004);
+        }
+        let mut fixes = folder_fixes(&root, &rows);
+        let names: Vec<String> = fixes.iter().map(|f| name_of(&f.to)).collect();
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert!(
+            names.contains(&"Lost (2004)".to_string())
+                && names.contains(&"Season 01".into())
+                && names.contains(&"Season 00".into())
+        );
+        // deepest first: the Season folders are renamed before the show folder
+        assert_eq!(name_of(&fixes[2].to), "Lost (2004)");
+        for f in fixes.iter_mut() {
+            f.include = true;
+        }
+        let plan = build_plan_mode(&root, &rows, &Destination::default(), PlexMode::RenameOnly, &fixes);
+        let rep = crate::ops::execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert!(root.join("Lost (2004)/Season 01/Lost (2004) - s01e02.mkv").is_file());
+        assert!(root.join("Lost (2004)/Season 01/Lost (2004) - s01e02.en.srt").is_file());
+        assert!(root.join("Lost (2004)/Season 00/Lost (2004) - s00e01.mkv").is_file());
+        assert!(!root.join("Lost").exists());
+        let log = rep.undo_log.unwrap();
+        let u = crate::ops::undo(&log, &mut |_, _| {});
+        assert!(u.errors.is_empty(), "{:?}", u.errors);
+        assert!(root.join("Lost/Season 1/Lost.S01E02.mkv").is_file());
+        assert!(root.join("Lost/Season 1/Lost.S01E02.eng.srt").is_file());
+        assert!(root.join("Lost/Specials/Lost.S00E01.mkv").is_file());
+        assert!(!root.join("Lost (2004)").exists());
+    }
+
+    #[test]
+    fn unticked_folder_fixes_leave_files_correct() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("TV");
+        touch(&root.join("Lost (2004)/Season 1/Lost.S01E02.mkv"));
+        let rows = scan(&root);
+        let fixes = folder_fixes(&root, &rows);
+        assert_eq!(fixes.len(), 1);
+        let plan = build_plan_mode(&root, &rows, &Destination::default(), PlexMode::RenameOnly, &fixes);
+        let rep = crate::ops::execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
+        assert!(rep.errors.is_empty(), "{:?}", rep.errors);
+        assert!(root.join("Lost (2004)/Season 1/Lost (2004) - s01e02.mkv").is_file());
     }
 }

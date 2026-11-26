@@ -71,6 +71,9 @@ pub struct PlanItem {
     pub status: Status,
     /// Notes for the preview (name fixed for Windows, long path, ...).
     pub warnings: Vec<String>,
+    /// 3.0.6: this item renames a folder (Plex "Rename only" folder-name
+    /// fixes), not a file. Folder items come after all file items.
+    pub is_dir: bool,
 }
 
 impl PlanItem {
@@ -88,6 +91,7 @@ impl PlanItem {
             renamed_for_collision: false,
             status: Status::Move,
             warnings: Vec::new(),
+            is_dir: false,
             source,
         }
     }

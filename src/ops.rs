@@ -28,6 +28,9 @@ pub const UNDO_DONE_SUFFIX: &str = ".undone.json";
 pub struct MoveRecord {
     pub from: PathBuf,
     pub to: PathBuf,
+    /// 3.0.6: a folder rename (Plex "Rename only" folder fixes).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_dir: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -89,6 +92,21 @@ pub fn move_file(from: &Path, to: &Path) -> io::Result<bool> {
         }
         Err(e) => Err(e),
     }
+}
+
+/// Rename a folder within its parent, never onto an existing folder or
+/// file (a case-only change goes through a temporary name).
+pub fn rename_dir(from: &Path, to: &Path) -> io::Result<()> {
+    if !from.is_dir() {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "folder no longer exists"));
+    }
+    if to.exists() {
+        if from != to && same_file(from, to) {
+            return case_only_rename(from, to);
+        }
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "a folder with that name already exists"));
+    }
+    fs::rename(from, to)
 }
 
 /// Rename via a unique temporary name in the same folder, so that only the
@@ -196,6 +214,18 @@ pub fn execute(plan: &Plan, cancel: &AtomicBool, progress: &mut dyn FnMut(usize,
         }
         progress(i, total, &item.source);
 
+        if item.is_dir {
+            // folder-name fix: same parent, never onto something that exists
+            match rename_dir(&item.source, &item.dest_path) {
+                Ok(()) => {
+                    report.moved += 1;
+                    log.moves.push(MoveRecord { from: item.source.clone(), to: item.dest_path.clone(), is_dir: true });
+                    dirty += 1;
+                }
+                Err(e) => report.errors.push((item.source.clone(), format!("Folder not renamed: {e}"))),
+            }
+            continue;
+        }
         if !item.source.is_file() {
             report.errors.push((item.source.clone(), "Source file no longer exists".into()));
             continue;
@@ -244,7 +274,7 @@ pub fn execute(plan: &Plan, cancel: &AtomicBool, progress: &mut dyn FnMut(usize,
                 if copied {
                     report.copied_across_devices += 1;
                 }
-                log.moves.push(MoveRecord { from: item.source.clone(), to: dest });
+                log.moves.push(MoveRecord { from: item.source.clone(), to: dest, is_dir: false });
                 dirty += 1;
             }
             Err(e) => report.errors.push((item.source.clone(), format!("Move failed: {e}"))),
@@ -308,6 +338,16 @@ pub fn undo(log_path: &Path, progress: &mut dyn FnMut(usize, usize)) -> UndoRepo
     let total = log.moves.len();
     for (i, m) in log.moves.iter().enumerate().rev() {
         progress(total - i, total);
+        if m.is_dir {
+            match rename_dir(&m.to, &m.from) {
+                Ok(()) => report.restored += 1,
+                Err(e) => {
+                    report.errors.push((m.to.clone(), format!("Folder name not restored: {e}")));
+                    remaining.push(m.clone());
+                }
+            }
+            continue;
+        }
         if !m.to.is_file() {
             report.errors.push((m.to.clone(), "File is no longer where Organimizer put it".into()));
             remaining.push(m.clone());

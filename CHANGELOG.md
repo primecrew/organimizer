@@ -4,6 +4,32 @@ All versions are Windows 10/11 builds (portable exe; from 2.0.5 also an
 installer). None of them is code-signed, and so far they have been tested on
 Linux and under Wine only, not on a real Windows PC.
 
+## 3.0.6 – Plex "Rename only" mode, Recent folders (branch `v3-organimizer`, not released yet)
+- Plex tab: new **Mode** choice at the top. **Rename only** is the default
+  (most libraries already have the right folders): each video and subtitle
+  is renamed inside the folder it is in, using the show folder
+  (title, year, `{tmdb-ID}`), the `Season NN` folder and the movie folder.
+  Nothing moves and no folder is created. Works when you choose a Season
+  folder, a show / movie folder or a whole library folder. Extras in an
+  extras folder keep it; extras next to a movie keep Plex's inline suffix.
+  Doubtful folders (a Season folder outside a show folder, a movie not in
+  its own folder, file and folder naming different titles, no year) are
+  flagged amber for Look up / the type-the-name prompt instead of guessed.
+- Rename only offers **folder name fixes** (`Season 2` -> `Season 02`,
+  `Specials` -> `Season 00`, adding the year / `{tmdb-ID}`, official extras
+  folder names) as separate preview rows, **unticked** by default. Ticked
+  folders are renamed after the files (deepest first), never onto an
+  existing name, never the chosen folder itself; Undo restores the old
+  folder names.
+- **Full sort** is the 3.0.5 behavior; its "In place" destination is now
+  called **Inside source folder**. Changing the mode asks for a Rescan.
+- The Source boxes (Organize and Plex Media) start **empty** on every
+  launch. A **Recent** list next to each holds the last 4 folders used
+  (most recent first, no duplicates, missing folders greyed out), stored
+  as `recent1..recent4` in `Organimizer.ini`; the last folder of an older
+  INI is moved into Recent.
+- Help (HELP.md) explains the two modes; README.txt updated.
+
 ## 3.0.5 – Plex naming Help, official extras and stacked files (branch `v3-organimizer`, not released yet)
 - Help (F1) now has a **Plex tab** chapter that explains official Plex Media
   Server naming for movies, the eight extras folders and inline suffixes,
