@@ -6,9 +6,10 @@ before merging, tagging or releasing.
 
 ## Automated
 
-- `cargo test --no-default-features`: 170 tests pass:
-  - 163 unit tests (Plex Rename only: inside a Season folder, show folder,
-    library root, doubtful parents flagged, folder fixes unticked by
+- `cargo test --no-default-features`: 171 tests pass:
+  - 164 unit tests (Plex Rename only: inside a Season folder, show folder,
+    library root, doubtful parents flagged, missing year is only a note
+    plus an unticked add-year fix, folder fixes unticked by
     default, folder-fix collision never applied, apply + undo of folder
     renames, unticked fixes leave files correct; Recent folders MRU and
     blank start; Plex name parser, per-file recognition and Why text,

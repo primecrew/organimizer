@@ -150,10 +150,16 @@ file names are not. Most libraries are like this.
   with a clean name. Extras next to the movie keep Plex's inline suffix
   (`Teaser-trailer.mkv`). Subtitles stay in their folder and take their
   video's new name.
+- **Folder names with a year:** Plex show folders are widely named
+  `Show Title (yyyy)` (for example `Breaking Bad (2008)`), and movie
+  folders `Movie Title (yyyy)` (for example `Heat (1995)`). A folder
+  without the year still works and is not marked as a problem: the Why
+  column just mentions this format, and when the year is known (from the
+  file name or Look up) an unticked folder fix offers to add it.
 - **When a folder looks wrong**, Organimizer does not guess: the row is
   marked amber with a note, for example a `Season 1` folder that is not
   inside a show folder, a movie that is not in its own folder, a file name
-  that names a different show than its folder, or no year. Click
+  that names a different show than its folder. Click
   **Look up** for that title to type the right name and year.
 - **Folder name fixes** are offered as separate rows above the file list,
   **unticked**: `Season 2` -> `Season 02`, `Specials` -> `Season 00`,

@@ -1704,6 +1704,7 @@ pub fn rename_only_review(rows: &mut [Row]) {
         if !matches!(a.kind, Kind::Movie | Kind::Episode) || a.from_tmdb {
             continue;
         }
+        let notes_before = a.notes.len();
         let parent = unit_dir(&r.source);
         let pname = name_of(&parent);
         let (title_dir, season_dir) = match season_of_dir(&pname) {
@@ -1757,8 +1758,25 @@ pub fn rename_only_review(rows: &mut [Row]) {
         } else if a.kind == Kind::Episode && a.air_date.is_none() {
             flag(a, "Rename only: not inside a Season folder (Plex expects Show\\Season NN)");
         }
-        if a.year.is_none() && a.tmdb_id.is_none() && !a.title.is_empty() {
-            flag(a, format!("Rename only: no year for this {what}: add it, or look it up"));
+        // A missing year alone is not a doubt: plain information in Why,
+        // plus an (unticked) add-year folder fix when the year is known.
+        let flagged = a.notes.len() > notes_before;
+        let folder_matches = !ft.is_empty() && norm(&a.title) == norm(&ft);
+        if folder_matches && let Some(i) = a.notes.iter().position(|n| n.starts_with("No year found")) {
+            a.notes.remove(i);
+            if !flagged && a.notes.is_empty() {
+                a.confidence = Confidence::High;
+            }
+        }
+        if folder_matches && fy.is_none() {
+            let (kind, fmt) =
+                if a.kind == Kind::Episode { ("show", "Show Title (yyyy)") } else { ("movie", "Movie Title (yyyy)") };
+            let tail = if a.year.is_some() {
+                "the folder fix above adds the year (optional)"
+            } else {
+                "add the year if you know it (Look up)"
+            };
+            a.because(format!("Plex {kind} folders are widely named \"{fmt}\": {tail}"));
         }
         r.detected = r.analysis.clone();
     }
@@ -1879,12 +1897,13 @@ pub fn folder_fixes(root: &Path, rows: &[Row]) -> Vec<FolderFix> {
         if let Some(id) = ftmdb.or(a.tmdb_id) {
             want.push_str(&format!(" {{tmdb-{id}}}"));
         }
+        let fmt = if a.kind == Kind::Episode { "Show Title (yyyy)" } else { "Movie Title (yyyy)" };
         let why = match (add_year, add_tmdb) {
-            (true, true) => "adds the year and the TMDB id",
-            (true, false) => "adds the year",
-            _ => "adds the TMDB id (Plex then skips its own guess)",
+            (true, true) => format!("adds the year and the TMDB id (widely used: \"{fmt}\")"),
+            (true, false) => format!("adds the year (widely used: \"{fmt}\")"),
+            _ => "adds the TMDB id (Plex then skips its own guess)".to_string(),
         };
-        add(&td, want, why.into(), &mut out);
+        add(&td, want, why, &mut out);
     }
     // never onto something that exists, never two folders to one name
     let mut targets: HashSet<String> = HashSet::new();
@@ -2749,7 +2768,7 @@ mod rename_only_tests {
         assert!(a.confidence < Confidence::High && a.notes.iter().any(|n| n.contains("own movie folder")), "{a:?}");
         let a = &row(&rows, "Serenity.S01E02.mkv").analysis;
         assert_eq!(a.title, "Firefly", "the file stays in Firefly\\Season 1");
-        assert!(a.confidence < Confidence::High, "file and folder disagree, and no year: {a:?}");
+        assert!(a.confidence < Confidence::High, "file and folder name different shows: {a:?}");
         assert!(crate::lookup::needs_name_prompt(a.confidence), "Look up asks for the name");
     }
 
@@ -2821,5 +2840,36 @@ mod rename_only_tests {
         let rep = crate::ops::execute(&plan, &AtomicBool::new(false), &mut |_, _, _| {});
         assert!(rep.errors.is_empty(), "{:?}", rep.errors);
         assert!(root.join("Lost (2004)/Season 1/Lost (2004) - s01e02.mkv").is_file());
+    }
+
+    #[test]
+    fn missing_year_alone_is_information_not_a_doubt() {
+        let d = tempfile::tempdir().unwrap();
+        let r = d.path();
+        touch(&r.join("Lost/Season 01/Lost.S01E02.mkv"));
+        touch(&r.join("The Wire/Season 01/The.Wire.2002.S01E03.mkv"));
+        touch(&r.join("Heat/Heat.mkv"));
+        let rows = scan(r);
+        for (file, fmt) in [("Lost.S01E02.mkv", "Show Title (yyyy)"), ("Heat.mkv", "Movie Title (yyyy)")] {
+            let a = &row(&rows, file).analysis;
+            assert_eq!(a.confidence, Confidence::High, "{file}: {a:?}");
+            assert!(a.notes.is_empty(), "no warning for a missing year: {:?}", a.notes);
+            assert!(a.why_text().contains(&format!("widely named \"{fmt}\"")), "{}", a.why_text());
+        }
+        // year known from the file name: High, and the add-year fix is offered (unticked)
+        let a = &row(&rows, "The.Wire.2002.S01E03.mkv").analysis;
+        assert_eq!((a.confidence, a.year), (Confidence::High, Some(2002)), "{a:?}");
+        let fixes = folder_fixes(r, &rows);
+        let names: Vec<(String, String)> = fixes.iter().map(|f| (name_of(&f.from), name_of(&f.to))).collect();
+        assert_eq!(names, vec![("The Wire".to_string(), "The Wire (2002)".to_string())]);
+        assert!(!fixes[0].include && fixes[0].why.contains("Show Title (yyyy)"), "{:?}", fixes[0]);
+        let plan = build_plan_mode(r, &rows, &Destination::default(), PlexMode::RenameOnly, &fixes);
+        let m = moves(&plan, r);
+        assert!(
+            m.contains(&("Lost/Season 01/Lost.S01E02.mkv".into(), "Lost/Season 01/Lost - s01e02.mkv".into())),
+            "{m:?}"
+        );
+        let heat = plan.items.iter().find(|i| i.source.ends_with("Heat/Heat.mkv")).unwrap();
+        assert_eq!(heat.status, Status::AlreadySorted, "Heat\\Heat.mkv is already named for its folder");
     }
 }

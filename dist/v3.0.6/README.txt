@@ -142,7 +142,9 @@ PLEX MEDIA TAB
                  each file is renamed where it is (show, year and season
                  from its Show (Year)\Season NN folders, movie from its
                  Movie (Year) folder). Nothing moves, no folder is made.
-                 Doubtful folders are marked amber (use Look up). Folder
+                 Doubtful folders are marked amber (use Look up); a
+                 missing year is only a note (folders are widely named
+                 "Show Title (yyyy)" / "Movie Title (yyyy)"). Folder
                  name fixes (Season 2 -> Season 02, Specials -> Season 00,
                  adding the year / {tmdb-ID}) are separate rows, unticked.
                  Full sort: builds the Plex folders and moves the files.

@@ -13,8 +13,11 @@ Linux and under Wine only, not on a real Windows PC.
   folder, a show / movie folder or a whole library folder. Extras in an
   extras folder keep it; extras next to a movie keep Plex's inline suffix.
   Doubtful folders (a Season folder outside a show folder, a movie not in
-  its own folder, file and folder naming different titles, no year) are
+  its own folder, file and folder naming different titles) are
   flagged amber for Look up / the type-the-name prompt instead of guessed.
+  A missing year alone is not flagged: the Why column notes that Plex
+  folders are widely named `Show Title (yyyy)` / `Movie Title (yyyy)`,
+  and an unticked folder fix adds the year when it is known.
 - Rename only offers **folder name fixes** (`Season 2` -> `Season 02`,
   `Specials` -> `Season 00`, adding the year / `{tmdb-ID}`, official extras
   folder names) as separate preview rows, **unticked** by default. Ticked
