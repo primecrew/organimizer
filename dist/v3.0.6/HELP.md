@@ -6,6 +6,9 @@ It renames files with ordered rules and sorts them into date folders such as
 into the folder layout Plex expects (the **Plex Media** tab).
 
 The full reference is `README.txt` next to `Organimizer.exe`.
+A user guide with screenshots of every step is online:
+https://github.com/primecrew/organimizer/blob/v3-organimizer/docs/v3/USER-GUIDE.md
+(this file is plain text because it opens in Notepad).
 
 Contents: Quick start (Organize) | Quick start (Plex Media) | Plex tab |
 Movies | Movie extras | TV shows | Common mistakes | Cheat sheet |

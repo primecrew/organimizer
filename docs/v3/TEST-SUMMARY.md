@@ -114,5 +114,12 @@ Own Xvfb `:96` and prefix `ps306-test/prefix`. Shared displays and prefixes were
 |---|---|
 | Plex tab starts with an empty Source box; **Recent ⏷** lists the folder from the INI; picking it fills the box | OK |
 | Mode shows **Rename only** selected by default; Scan of `TV` (`Lost (2004)\Season 1`, `Specials`) proposes `Lost (2004) - s01e02.mkv` / `- s00e01.mkv` in their own folders; two folder fixes (`Season 01`, `Season 00`) shown unticked | OK (screenshot `plex-rename-only.png`) |
-| Ticking one fix changes Apply to "rename 2 files and 1 folders"; switching to Full sort shows Destination *Inside source folder* / *Library folders* and "Mode changed: click Rescan" (Apply disabled) | OK (screenshot `plex-full-sort-destination.png`) |
-| Apply / Undo with folder renames on disk | unit tests only (`apply_with_folder_fixes_then_undo_restores_everything`); not run in the GUI |
+| Ticking one fix changes Apply to "rename 2 files and 1 folders"; switching to Full sort shows Destination *Inside source folder* / *Library folders* and "Mode changed: click Rescan" (Apply disabled) | OK (screenshot `plex-full-sort-library-folders.png`) |
+| Apply / Undo with folder renames on disk (Rename only, `D:\TV Shows`, both folder fixes ticked): 7 files renamed, `Season 2` -> `Season 02`, `Specials` -> `Season 00`; Undo restored every name and folder | OK (unit test `apply_with_folder_fixes_then_undo_restores_everything` too) |
+| Full sort Apply / Undo on `D:\Downloads` (7 files into Plex folders), Undo restores and removes the created folders | OK (screenshots `plex-apply-confirm.png`, `plex-undo-confirm.png`) |
+| Type-the-name prompt from Look up on a Low row (mock TMDB, made-up key) | OK (screenshot `plex-type-the-title.png`) |
+| Organize tab starts empty; Recent lists the INI folders; picking one shows the live preview | OK (screenshots `organize-recent-dropdown.png`, `organize-tab.png`) |
+| F1 opens HELP.md in Notepad | OK (screenshot `help-f1-notepad.png`) |
+
+Screenshots for the user guide (`docs/v3/USER-GUIDE.md`) use sample folders on a Wine `D:` drive only.
+| Release build (`scripts/build-release.sh`): `Organimizer-v3.0.6-setup.exe`, `Organimizer-v3.0.6-win64.zip`, `Organimizer-v3.0.6-SHA256SUMS.txt`; silent install (`/S`) in a fresh Wine prefix puts Organimizer.exe (same SHA-256 as the build), docs and the Start Menu shortcut `PrimeCrew Software\Organimizer.lnk` in place; the installed app starts as v3.0.6 with an empty Source box and settings in `%APPDATA%\PrimeCrew Software\Organimizer` | OK |
