@@ -1,4 +1,4 @@
-# Organimizer 3.0.6 - user guide (with screenshots)
+# Organimizer 3.0.6 - user guide
 
 > This guide is for the **3.0 branch** (`v3-organimizer`). 3.0 is still in
 > testing: it is not merged to `master` and has no GitHub release yet. The

@@ -22,7 +22,7 @@ deleted, and the last run can be undone.
 > is still being tested; it is not merged to `master` and has no GitHub
 > release yet (the latest release is PhotoSorter v2.0.5).
 >
-> **User guide with screenshots:** [docs/v3/USER-GUIDE.md](docs/v3/USER-GUIDE.md)
+> **User guide:** [docs/v3/USER-GUIDE.md](docs/v3/USER-GUIDE.md)
 
 ## Features
 
@@ -82,7 +82,7 @@ End-user docs: `dist/v3.0.6/README.txt` and `dist/v3.0.6/HELP.md` (shipped
 as `README.txt` and `HELP.md`, together with `LICENSE`, `COPYRIGHT` and
 `dist/v3.0.6/THIRD-PARTY-NOTICES.txt`); older versions under `dist/v2.*`,
 v1 docs: `dist/README.txt`. Version history: [CHANGELOG.md](CHANGELOG.md).
-User guide with screenshots: [docs/v3/USER-GUIDE.md](docs/v3/USER-GUIDE.md).
+User guide: [docs/v3/USER-GUIDE.md](docs/v3/USER-GUIDE.md).
 Test notes: `docs/v2/TEST-SUMMARY.md`, `docs/v3/TEST-SUMMARY.md`;
 screenshots: `docs/v3/screenshots/`.
 
